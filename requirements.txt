@@ -1,0 +1,16 @@
+# Data Handling
+pandas
+lxml
+openpyxl
+
+# API & Web
+fastapi
+uvicorn[standard]
+streamlit
+
+# Config & Validation
+pydantic
+pyyaml
+
+# Testing
+pytest

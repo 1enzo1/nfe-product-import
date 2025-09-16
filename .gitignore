@@ -1,0 +1,23 @@
+# Virtualenv
+.venv/
+venv/
+env/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE / Editor folders
+.vscode/
+.idea/
+*.swp
+
+# Data files (não versionar dados)
+data/input/*
+data/output/*
+data/master/*
+
+# Logs and databases
+*.log
+*.db
