@@ -12,5 +12,9 @@ streamlit
 pydantic
 pyyaml
 
+# File uploads
+python-multipart
+
 # Testing
 pytest
+
