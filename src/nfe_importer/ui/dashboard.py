@@ -1,4 +1,10 @@
-"""Streamlit dashboard used to reconcile pending items."""
+"""Streamlit dashboard used to reconcile pending items.
+
+Notes for Streamlit Cloud deployment:
+- This app expects the project package to be importable as ``nfe_importer``.
+- When running on Streamlit Cloud (streamlit.io), ensure that ``src/`` is on
+  ``PYTHONPATH``. We also add it programmatically below for robustness.
+"""
 
 from __future__ import annotations
 
@@ -9,8 +15,13 @@ from typing import List, Optional, TYPE_CHECKING
 import pandas as pd
 import streamlit as st
 
-from ..config import Settings
-from ..core.pipeline import Processor
+# Make sure the package is importable when running via "streamlit run"
+import sys
+_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_ROOT / "src"))
+
+from nfe_importer.config import Settings
+from nfe_importer.core.pipeline import Processor
 
 if TYPE_CHECKING:  # pragma: no cover - only for type checkers
     from streamlit.runtime.uploaded_file_manager import UploadedFile
@@ -120,9 +131,26 @@ def show_catalog_search(processor: Processor) -> None:
         st.sidebar.dataframe(filtered.head(50))
 
 
+def _load_settings_with_fallback(config_path: str) -> Settings:
+    """Load settings; if master Excel is missing, fallback to example_docs/.
+
+    This improves UX on Streamlit Cloud, where only the repository files are
+    available and a local data/ folder may be empty.
+    """
+    settings = Settings.load(config_path)
+    # If the configured master_data_file doesn't exist, try to discover one
+    mfile = Path(settings.paths.master_data_file)
+    if not mfile.exists():
+        candidates = list((Path.cwd() / "example_docs").glob("*.xlsx"))
+        if candidates:
+            settings.paths.master_data_file = candidates[0]
+            settings.ensure_folders()
+    return settings
+
+
 def main() -> None:
     args = parse_args()
-    settings = Settings.load(args.config)
+    settings = _load_settings_with_fallback(args.config)
     processor = Processor(settings)
 
     st.set_page_config(page_title="Conciliação de NF-e", layout="wide")
