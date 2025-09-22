@@ -342,6 +342,51 @@ def main():
         else:
             html_parts.append("<p>(sem dados)</p>")
 
+    # Per-XML breakdown
+    html_parts.append("<h2>Por XML (por variante)</h2>")
+    for v in VARIANTS:
+        metrics_path = OUT_DIRS[v] / "metrics.json"
+        base = {}
+        if metrics_path.exists():
+            try:
+                base = json.loads(metrics_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        table = base.get("per_invoice") or []
+        html_parts.append(f"<h3>{v}</h3>")
+        if table:
+            headers = ["Arquivo", "Itens", "Matched", "Unmatched", "% Matched"]
+            rows = []
+            for row in table:
+                fname = (row.get("file_path") or "").replace("\\", "/").split("/")[-1]
+                rows.append([fname, row.get('items_total',0), row.get('matched',0), row.get('unmatched',0), row.get('pct_matched',0)])
+            html_parts.append(render_table(headers, rows))
+        else:
+            html_parts.append("<p>(sem dados)</p>")
+
+    # Pendências (amostras detalhadas)
+    html_parts.append("<h2>Pendências (amostras detalhadas)</h2>")
+    for v in VARIANTS:
+        metrics_path = OUT_DIRS[v] / "metrics.json"
+        base = {}
+        if metrics_path.exists():
+            try:
+                base = json.loads(metrics_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        samples = base.get("pendings_samples") or []
+        html_parts.append(f"<h3>{v}</h3>")
+        if samples:
+            headers = ["Arquivo", "cProd", "barcode", "description", "reason", "top_suggestions"]
+            rows = []
+            for s in samples:
+                fname = (s.get("file_path") or "").replace("\\", "/").split("/")[-1]
+                tops = "; ".join([f"{x.get('sku')} ({x.get('confidence')})" for x in (s.get('top_suggestions') or [])])
+                rows.append([fname, s.get("cProd",""), s.get("barcode",""), s.get("description",""), s.get("reason",""), tops])
+            html_parts.append(render_table(headers, rows))
+        else:
+            html_parts.append("<p>(sem pendências)</p>")
+
     # Erros por campo
     html_parts.append("<h2>Erros por campo</h2>")
     for r in results:
