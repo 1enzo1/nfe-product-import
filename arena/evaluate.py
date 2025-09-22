@@ -1,4 +1,5 @@
 import csv
+import os
 import json
 import subprocess
 import sys
@@ -213,6 +214,101 @@ def main():
         md_lines.append("")
 
     (reports / "summary.md").write_text("\n".join(md_lines), encoding="utf-8")
+
+    # Also generate an HTML summary with the same data/snippets
+    def html_escape(s: str) -> str:
+        import html as _html
+        return _html.escape(s, quote=True)
+
+    def render_table(headers, rows):
+        parts = ["<table><thead><tr>"]
+        for h in headers:
+            parts.append(f"<th>{html_escape(str(h))}</th>")
+        parts.append("</tr></thead><tbody>")
+        for row in rows:
+            parts.append("<tr>")
+            for cell in row:
+                parts.append(f"<td>{html_escape(str(cell))}</td>")
+            parts.append("</tr>")
+        parts.append("</tbody></table>")
+        return "".join(parts)
+
+    html_parts = [
+        "<!doctype html>",
+        "<meta charset=\"utf-8\">",
+        "<title>Arena – Summary</title>",
+        "<style>body{font-family:system-ui,Segoe UI,Arial,sans-serif;padding:24px;max-width:1100px;margin:auto} table{border-collapse:collapse;width:100%;margin:12px 0} th,td{border:1px solid #ddd;padding:8px} th{background:#f5f5f5;text-align:left} tr:nth-child(even){background:#fafafa} h1,h2,h3{margin:18px 0 8px}</style>",
+        "<h1>Arena – Relatório</h1>",
+        f"<p>Testes: {html_escape(test_status)}</p>",
+        "<h2>Scoreboard</h2>",
+    ]
+
+    sb_headers = ["Variante", "Itens", "OK", "% Completo", "Tempo (s)", "Matched", "Unmatched"]
+    sb_rows = [
+        [r['variant'], r['itens_total'], r['itens_ok'], r['pct_completo'], r['tempo_s'], r.get('matched',''), r.get('unmatched','')]
+        for r in results
+    ]
+    html_parts.append(render_table(sb_headers, sb_rows))
+
+    # Confiabilidade
+    html_parts.append("<h2>Confiabilidade</h2>")
+    conf_headers = ["Variante", "threshold_used", "high", "mid", "low"]
+    conf_rows = []
+    for r in results:
+        b = r.get("confidence_buckets", {}) or {}
+        conf_rows.append([r['variant'], r.get('threshold_used'), b.get('high',0), b.get('mid',0), b.get('low',0)])
+    html_parts.append(render_table(conf_headers, conf_rows))
+
+    # Erros por campo
+    html_parts.append("<h2>Erros por campo</h2>")
+    for r in results:
+        html_parts.append(f"<h3>{html_escape(r['variant'])}</h3>")
+        errs = r.get("erros_por_campo") or {}
+        if errs:
+            headers = ["campo", "contagem"]
+            rows = [[k, v] for k, v in errs.items()]
+            html_parts.append(render_table(headers, rows))
+        else:
+            html_parts.append("<p>Nenhum erro mapeado.</p>")
+
+    # Amostras
+    html_parts.append("<h2>Amostras</h2>")
+    for v in VARIANTS:
+        html_parts.append(f"<h3>{html_escape(v)} – primeiras 5 linhas (colunas principais)</h3>")
+        p = OUTS[v]
+        rows = []
+        if p.exists():
+            try:
+                with p.open("r", encoding="utf-8-sig", newline="") as f:
+                    r = csv.DictReader(f)
+                    rows = [row for _, row in zip(range(5), r)]
+            except Exception:
+                pass
+        if rows:
+            headers = core_cols
+            data = [[row.get(c, "") for c in core_cols] for row in rows]
+            html_parts.append(render_table(headers, data))
+        else:
+            html_parts.append("<p>(sem linhas)</p>")
+
+        html_parts.append(f"<p>{html_escape(v)} – primeiras 5 pendências (cProd, barcode, description)</p>")
+        pend = OUT_DIRS[v] / "pendings.csv"
+        prow = []
+        if pend.exists():
+            try:
+                with pend.open("r", encoding="utf-8-sig", newline="") as f:
+                    r = csv.DictReader(f)
+                    prow = [row for _, row in zip(range(5), r)]
+            except Exception:
+                pass
+        if prow:
+            headers = ["cProd", "barcode", "description"]
+            data = [[row.get("cProd",""), row.get("barcode",""), row.get("description","")] for row in prow]
+            html_parts.append(render_table(headers, data))
+        else:
+            html_parts.append("<p>(sem pendências)</p>")
+
+    (reports / "summary.html").write_text("".join(html_parts), encoding="utf-8")
 
 
 if __name__ == "__main__":
