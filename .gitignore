@@ -21,3 +21,8 @@ data/master/*
 # Logs and databases
 *.log
 *.db
+
+# Arena outputs
+arena/variants/*/out/*
+!arena/variants/*/out/.keep
+arena/reports/*

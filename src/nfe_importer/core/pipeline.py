@@ -8,7 +8,7 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Callable, Iterable, List, Optional
 
 from ..config import Settings
 from .generator import CSVGenerator
@@ -220,5 +220,30 @@ class Processor:
                 stop_event.wait(timeout=watch_config.interval_minutes * 60)
 
 
-__all__ = ["Processor", "ProcessingResult"]
+
+def run_pipeline(
+    *,
+    settings: Settings | str | Path = Path("config.yaml"),
+    files: Iterable[Path | str] | None = None,
+    mode: str = "arena",
+    user: Optional[str] = None,
+    processor_factory: Callable[[Settings], Processor] | None = None,
+    configure_processor: Callable[[Processor], None] | None = None,
+) -> Optional[ProcessingResult]:
+    """Execute the pipeline with optional customisation hooks."""
+
+    resolved_settings = Settings.load(settings) if isinstance(settings, (str, Path)) else settings
+    resolved_settings.ensure_folders()
+    processor = processor_factory(resolved_settings) if processor_factory else Processor(resolved_settings)
+
+    if configure_processor:
+        configure_processor(processor)
+
+    if files:
+        resolved_files = [Path(path) for path in files]
+        return processor.process_files(resolved_files, mode=mode, user=user)
+
+    return processor.process_directory(mode=mode, user=user)
+
+__all__ = ["Processor", "ProcessingResult", "run_pipeline"]
 

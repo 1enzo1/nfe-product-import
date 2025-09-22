@@ -1,0 +1,219 @@
+import csv
+import json
+import subprocess
+import sys
+import time
+from collections import defaultdict
+from pathlib import Path
+
+VARIANTS = ["A", "B", "C", "D"]
+# Repository root (directory that contains 'arena/')
+REPO = Path(__file__).resolve().parents[1]
+RUNNERS = {v: REPO / f"arena/variants/{v}/runner.py" for v in VARIANTS}
+OUTS = {v: REPO / f"arena/variants/{v}/out/result.csv" for v in VARIANTS}
+OUT_DIRS = {v: p.parent for v, p in OUTS.items()}
+
+
+def _load_yaml_defaults():
+    ns = "custom"
+    ncm_key = "ncm"
+    unidade_key = "unidade"
+    cest_key = "cest"
+    cfg_path = REPO / "config.yaml"
+    try:
+        import yaml  # type: ignore
+
+        data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        ns = (data.get("metafields", {}) or {}).get("namespace", ns)
+        keys = (data.get("metafields", {}) or {}).get("keys", {}) or {}
+        ncm_key = keys.get("ncm", ncm_key)
+        unidade_key = keys.get("unidade", unidade_key)
+        cest_key = keys.get("cest", cest_key)
+    except Exception:
+        pass
+    return ns, ncm_key, unidade_key, cest_key
+
+
+def _fieldnames_for_metrics():
+    namespace, ncm_key, _, _ = _load_yaml_defaults()
+    ean_col = "Barcode"
+    ncm_col = f"product.metafields.{namespace}.{ncm_key}"
+    desc_col = "Title"
+    return ean_col, ncm_col, desc_col
+
+
+def _run_tests_optional() -> str:
+    try:
+        t0 = time.time()
+        env = dict(**os.environ)
+        env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+        res = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=str(REPO), env=env)
+        dt = time.time() - t0
+        return f"pass ({dt:.2f}s)" if res.returncode == 0 else f"fail ({dt:.2f}s)"
+    except Exception:
+        return "skipped"
+
+
+def run_variant(v: str):
+    OUT_DIRS[v].mkdir(parents=True, exist_ok=True)
+    t0 = time.time()
+    proc = subprocess.run([sys.executable, str(RUNNERS[v])], cwd=str(REPO))
+    dt = time.time() - t0
+
+    # Base metrics from runner
+    metrics_path = OUT_DIRS[v] / "metrics.json"
+    base = {}
+    if metrics_path.exists():
+        try:
+            base = json.loads(metrics_path.read_text(encoding="utf-8"))
+        except Exception:
+            base = {}
+
+    # CSV-derived completeness metrics
+    total = ok = 0
+    field_errors = defaultdict(int)
+    ean_col, ncm_col, desc_col = _fieldnames_for_metrics()
+    if OUTS[v].exists():
+        with OUTS[v].open(newline="", encoding="utf-8-sig") as f:
+            r = csv.DictReader(f)
+            for row in r:
+                total += 1
+                missing = []
+                if not (row.get(ean_col) or "").strip():
+                    missing.append("ean")
+                if not (row.get(ncm_col) or "").strip():
+                    missing.append("ncm")
+                if not (row.get(desc_col) or "").strip():
+                    missing.append("descricao")
+                if not missing:
+                    ok += 1
+                for m in missing:
+                    field_errors[m] += 1
+
+    return {
+        "variant": v,
+        "itens_total": total,
+        "itens_ok": ok,
+        "pct_completo": round(100 * ok / total, 2) if total else 0.0,
+        "tempo_s": round(dt, 3),
+        "erros_por_campo": dict(field_errors),
+        "matched": base.get("matched"),
+        "unmatched": base.get("unmatched"),
+        "run_id": base.get("run_id"),
+        "exit_code": proc.returncode,
+        "header_ok": base.get("header_ok"),
+        "threshold_used": base.get("threshold_used"),
+        "confidence_buckets": base.get("confidence_buckets", {}),
+    }
+
+
+def main():
+    reports = REPO / "arena/reports"
+    reports.mkdir(parents=True, exist_ok=True)
+
+    test_status = _run_tests_optional()
+
+    results = [run_variant(v) for v in VARIANTS]
+
+    # Scoreboard CSV
+    scoreboard = reports / "scoreboard.csv"
+    with scoreboard.open("w", newline="", encoding="utf-8") as f:
+        fieldnames = [
+            "variant",
+            "itens_total",
+            "itens_ok",
+            "pct_completo",
+            "tempo_s",
+            "matched",
+            "unmatched",
+        ]
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        for r in results:
+            w.writerow({k: r.get(k) for k in fieldnames})
+
+    # Markdown summary
+    md_lines = [
+        "# Arena – Relatório",
+        "",
+        f"Testes: {test_status}",
+        "",
+        "| Variante | Itens | OK | % Completo | Tempo (s) | Matched | Unmatched |",
+        "|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    for r in results:
+        md_lines.append(
+            f"| {r['variant']} | {r['itens_total']} | {r['itens_ok']} | {r['pct_completo']} | {r['tempo_s']} | {r.get('matched','')} | {r.get('unmatched','')} |"
+        )
+
+    md_lines += ["", "## Confiabilidade", ""]
+    for r in results:
+        buckets = r.get("confidence_buckets", {}) or {}
+        md_lines.append(f"### {r['variant']}")
+        md_lines.append(f"- threshold_used: {r.get('threshold_used')}")
+        md_lines.append(f"- buckets: high={buckets.get('high',0)}, mid={buckets.get('mid',0)}, low={buckets.get('low',0)}")
+        md_lines.append("")
+
+    md_lines += ["", "## Erros por campo", ""]
+    for r in results:
+        md_lines.append(f"### {r['variant']}")
+        if r["erros_por_campo"]:
+            for k, v in r["erros_por_campo"].items():
+                md_lines.append(f"- {k}: {v}")
+        else:
+            md_lines.append("- Nenhum erro mapeado.")
+        md_lines.append("")
+
+    # Snippets
+    namespace, ncm_key, unidade_key, cest_key = _load_yaml_defaults()
+    ncm_col = f"product.metafields.{namespace}.{ncm_key}"
+    uni_col = f"product.metafields.{namespace}.{unidade_key}"
+    cest_col = f"product.metafields.{namespace}.{cest_key}"
+    core_cols = ["Handle", "Title", "SKU", "Barcode", ncm_col, uni_col, cest_col]
+
+    md_lines += ["", "## Amostras", ""]
+    for v in VARIANTS:
+        md_lines.append(f"### {v} – primeiras 5 linhas (colunas principais)")
+        p = OUTS[v]
+        if p.exists():
+            try:
+                with p.open("r", encoding="utf-8-sig", newline="") as f:
+                    r = csv.DictReader(f)
+                    rows = [row for _, row in zip(range(5), r)]
+                if rows:
+                    md_lines.append("| " + " | ".join(core_cols) + " |")
+                    md_lines.append("|" + "|".join(["---"] * len(core_cols)) + "|")
+                    for row in rows:
+                        md_lines.append("| " + " | ".join([str(row.get(c, "")) for c in core_cols]) + " |")
+                else:
+                    md_lines.append("- (sem linhas)")
+            except Exception:
+                md_lines.append("- (falha ao ler result.csv)")
+        else:
+            md_lines.append("- (arquivo ausente)")
+
+        pend = OUT_DIRS[v] / "pendings.csv"
+        md_lines.append(f"{v} – primeiras 5 pendências (cProd, barcode, description)")
+        if pend.exists():
+            try:
+                with pend.open("r", encoding="utf-8-sig", newline="") as f:
+                    r = csv.DictReader(f)
+                    rows = [row for _, row in zip(range(5), r)]
+                if rows:
+                    md_lines.append("| cProd | barcode | description |")
+                    md_lines.append("|---|---|---|")
+                    for row in rows:
+                        md_lines.append("| " + " | ".join([str(row.get(k, "")) for k in ["cProd", "barcode", "description"]]) + " |")
+                else:
+                    md_lines.append("- (sem pendências)")
+            except Exception:
+                md_lines.append("- (falha ao ler pendings.csv)")
+        else:
+            md_lines.append("- (pendings.csv ausente)")
+        md_lines.append("")
+
+    (reports / "summary.md").write_text("\n".join(md_lines), encoding="utf-8")
+
+
+if __name__ == "__main__":
+    main()
