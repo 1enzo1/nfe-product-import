@@ -179,6 +179,13 @@ class CSVGenerator:
                 "reason": pending.reason or "",
                 "suggestions": self._format_suggestions(pending.suggestions),
             }
+            # include attempts if provided by matcher
+            attempts = getattr(pending, "attempts", None)
+            if attempts:
+                try:
+                    record["attempts"] = "; ".join(f"{a}:{b}" for a, b in attempts)
+                except Exception:
+                    record["attempts"] = str(attempts)
             records.append(record)
 
         if not records:

@@ -53,17 +53,18 @@ class ProductMatcher:
         unmatched: List[UnmatchedItem] = []
 
         for item in items:
-            decision = self.match_item(item)
+            decision, attempts = self._match_with_trace(item)
             if decision:
                 matched.append(decision)
             else:
-                unmatched.append(
-                    UnmatchedItem(
-                        item=item,
-                        suggestions=self.suggest(item),
-                        reason="No match found",
-                    )
+                pending = UnmatchedItem(
+                    item=item,
+                    suggestions=self.suggest(item),
+                    reason=self._format_attempts_reason(attempts),
                 )
+                # attach attempts for downstream reporting (generator/pending export)
+                setattr(pending, "attempts", attempts)
+                unmatched.append(pending)
 
         return matched, unmatched
 
@@ -107,6 +108,61 @@ class ProductMatcher:
             return self._decision(item, product, confidence=score, source="fuzzy")
 
         return None
+
+    def _match_with_trace(self, item: NFEItem) -> Tuple[Optional[MatchDecision], List[Tuple[str, str]]]:
+        attempts: List[Tuple[str, str]] = []
+        # synonym by cProd
+        if item.sku:
+            sku = self.synonyms.lookup_by_cprod(item.sku)
+            product = self._product_from_sku(sku)
+            if product:
+                return self._decision(item, product, confidence=0.99, source="synonym-sku"), attempts
+            attempts.append(("synonym-sku", "not_found"))
+
+        # exact SKU
+        product = self._product_from_sku(item.sku)
+        if product:
+            self.synonyms.register(sku=product.sku, cprod=item.sku, barcode=item.barcode, description=item.description)
+            return self._decision(item, product, confidence=1.0, source="sku"), attempts
+        attempts.append(("sku", "not_found"))
+
+        # synonym by barcode
+        if item.barcode:
+            sku = self.synonyms.lookup_by_barcode(item.barcode)
+            product = self._product_from_sku(sku)
+            if product:
+                return self._decision(item, product, confidence=0.98, source="synonym-barcode"), attempts
+            attempts.append(("synonym-barcode", "not_found"))
+
+        # direct barcode
+        product = self._product_from_barcode(item.barcode)
+        if product:
+            self.synonyms.register(sku=product.sku, barcode=item.barcode, description=item.description)
+            return self._decision(item, product, confidence=0.97, source="barcode"), attempts
+        attempts.append(("barcode", "not_found"))
+
+        # synonym by description
+        sku = self.synonyms.lookup_by_description(item.description)
+        product = self._product_from_sku(sku)
+        if product:
+            return self._decision(item, product, confidence=0.95, source="synonym-description"), attempts
+        attempts.append(("synonym-description", "not_found"))
+
+        # fuzzy
+        product, score = self._best_fuzzy_match(item)
+        if product and score >= self.auto_threshold:
+            self.synonyms.register(sku=product.sku, description=item.description)
+            return self._decision(item, product, confidence=score, source="fuzzy"), attempts
+        attempts.append(("fuzzy", f"best={score:.2f} < threshold={self.auto_threshold:.2f}"))
+
+        return None, attempts
+
+    @staticmethod
+    def _format_attempts_reason(attempts: List[Tuple[str, str]]) -> str:
+        if not attempts:
+            return "No match found"
+        parts = [f"{step}:{detail}" for step, detail in attempts]
+        return "; ".join(parts)
 
     def suggest(self, item: NFEItem, top_n: int = 5) -> List[Suggestion]:
         candidates = []
