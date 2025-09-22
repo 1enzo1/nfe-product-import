@@ -17,7 +17,7 @@ LOGGER = logging.getLogger(__name__)
 class ProductMatcher:
     """Resolve NF-e items to products from the master catalogue."""
 
-    def __init__(self, products: Iterable[CatalogProduct], synonyms: SynonymCache, *, auto_threshold: float = 0.92) -> None:
+    def __init__(self, products: Iterable[CatalogProduct], synonyms: SynonymCache, *, auto_threshold: float = 0.95) -> None:
         self.products = list(products)
         self.synonyms = synonyms
         self.auto_threshold = auto_threshold
