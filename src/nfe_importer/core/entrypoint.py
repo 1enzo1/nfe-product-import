@@ -191,6 +191,13 @@ def run(*, mode: str, data_dir: str, out_path: str, config_path: str = "config.y
             buckets["low"] += 1
     metrics["confidence_buckets"] = buckets
 
+    # Match source distribution (e.g., sku, barcode, synonym-*, fuzzy)
+    source_counts: Dict[str, int] = {}
+    for md in summary.matched:
+        source = getattr(md, "match_source", "unknown") or "unknown"
+        source_counts[source] = source_counts.get(source, 0) + 1
+    metrics["match_source_counts"] = dict(sorted(source_counts.items(), key=lambda x: (-x[1], x[0])))
+
     # Detailed samples of first 5 pendings with suggestions
     pend_samples = []
     for pending in summary.unmatched[:5]:

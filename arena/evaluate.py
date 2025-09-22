@@ -155,6 +155,27 @@ def main():
         md_lines.append(f"- buckets: high={buckets.get('high',0)}, mid={buckets.get('mid',0)}, low={buckets.get('low',0)}")
         md_lines.append("")
 
+    # Match source distribution
+    md_lines += ["", "## Distribuição por fonte de match", ""]
+    for v in VARIANTS:
+        metrics_path = OUT_DIRS[v] / "metrics.json"
+        if not metrics_path.exists():
+            continue
+        try:
+            base = json.loads(metrics_path.read_text(encoding="utf-8"))
+        except Exception:
+            base = {}
+        src = base.get("match_source_counts") or {}
+        md_lines.append(f"### {v}")
+        if src:
+            md_lines.append("| fonte | contagem |")
+            md_lines.append("|---|---:|")
+            for k, val in src.items():
+                md_lines.append(f"| {k} | {val} |")
+        else:
+            md_lines.append("- (sem dados)")
+        md_lines.append("")
+
     # Per-XML breakdown
     md_lines += ["", "## Por XML (por variante)", ""]
     for v in VARIANTS:
@@ -302,6 +323,25 @@ def main():
         conf_rows.append([r['variant'], r.get('threshold_used'), b.get('high',0), b.get('mid',0), b.get('low',0)])
     html_parts.append(render_table(conf_headers, conf_rows))
 
+    # Match source distribution
+    html_parts.append("<h2>Distribuição por fonte de match</h2>")
+    for v in VARIANTS:
+        metrics_path = OUT_DIRS[v] / "metrics.json"
+        base = {}
+        if metrics_path.exists():
+            try:
+                base = json.loads(metrics_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        src = base.get("match_source_counts") or {}
+        html_parts.append(f"<h3>{v}</h3>")
+        if src:
+            headers = ["fonte", "contagem"]
+            rows = [[k, v] for k, v in src.items()]
+            html_parts.append(render_table(headers, rows))
+        else:
+            html_parts.append("<p>(sem dados)</p>")
+
     # Erros por campo
     html_parts.append("<h2>Erros por campo</h2>")
     for r in results:
@@ -352,6 +392,56 @@ def main():
             html_parts.append("<p>(sem pendências)</p>")
 
     (reports / "summary.html").write_text("".join(html_parts), encoding="utf-8")
+
+    # Full pendings report (HTML) per variant
+    pendings_html = [
+        "<!doctype html>",
+        "<meta charset=\"utf-8\">",
+        "<title>Arena – Pendências</title>",
+        "<style>body{font-family:system-ui,Segoe UI,Arial,sans-serif;padding:24px;max-width:1200px;margin:auto} table{border-collapse:collapse;width:100%;margin:12px 0} th,td{border:1px solid #ddd;padding:6px} th{background:#f5f5f5;text-align:left} tr:nth-child(even){background:#fafafa} h1,h2,h3{margin:18px 0 8px}</style>",
+        "<h1>Pendências – Listagem Completa</h1>",
+    ]
+    for v in VARIANTS:
+        pend = OUT_DIRS[v] / "pendings.csv"
+        metrics_path = OUT_DIRS[v] / "metrics.json"
+        inv_map = {}
+        if metrics_path.exists():
+            try:
+                base = json.loads(metrics_path.read_text(encoding="utf-8"))
+                for row in base.get("per_invoice", []) or []:
+                    inv_map[row.get("access_key")] = row.get("file_path")
+            except Exception:
+                pass
+        pendings_html.append(f"<h2>Variante {v}</h2>")
+        if pend.exists():
+            try:
+                with pend.open("r", encoding="utf-8-sig", newline="") as f:
+                    r = csv.DictReader(f)
+                    rows = list(r)
+                if rows:
+                    headers = ["invoice_key", "file", "item_number", "cProd", "barcode", "description", "reason"]
+                    table_rows = []
+                    for row in rows:
+                        file_name = inv_map.get(row.get("invoice_key")) or ""
+                        file_name = (file_name.replace("\\", "/").split("/")[-1]) if file_name else ""
+                        table_rows.append([
+                            row.get("invoice_key",""),
+                            file_name,
+                            row.get("item_number",""),
+                            row.get("cProd",""),
+                            row.get("barcode",""),
+                            row.get("description",""),
+                            row.get("reason",""),
+                        ])
+                    pendings_html.append(render_table(headers, table_rows))
+                else:
+                    pendings_html.append("<p>(sem pendências)</p>")
+            except Exception:
+                pendings_html.append("<p>(falha ao ler pendings.csv)</p>")
+        else:
+            pendings_html.append("<p>(pendings.csv ausente)</p>")
+
+    (reports / "pendings.html").write_text("".join(pendings_html), encoding="utf-8")
 
 
 if __name__ == "__main__":
