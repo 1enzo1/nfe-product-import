@@ -488,6 +488,68 @@ def main():
 
     (reports / "pendings.html").write_text("".join(pendings_html), encoding="utf-8")
 
+    # Pendências vs. Catálogo (contagens) — MD + HTML
+    def _catalog_sets():
+        import pandas as pd
+        data_dir = REPO / "arena" / "data"
+        xls = list(data_dir.glob("*.xlsx"))
+        if not xls:
+            return set(), set()
+        df = pd.read_excel(xls[0], sheet_name=0, engine="openpyxl")
+        df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
+        eans, skus = set(), set()
+        for col in ("ean", "ean13", "codigo_barras"):
+            if col in df.columns:
+                eans |= {str(x).strip() for x in df[col].tolist() if pd.notna(x)}
+        for col in ("sku", "codigo", "cod"):
+            if col in df.columns:
+                skus |= {str(x).strip() for x in df[col].tolist() if pd.notna(x)}
+        return eans, skus
+
+    eans, skus = _catalog_sets()
+
+    def compare_pendings_for(v):
+        p = OUT_DIRS[v] / "pendings.csv"
+        stats = {"ean_in_catalog": 0, "sku_in_catalog": 0, "both": 0, "neither": 0, "total": 0}
+        if not p.exists():
+            return stats
+        with p.open("r", encoding="utf-8-sig", newline="") as f:
+            r = csv.DictReader(f)
+            for row in r:
+                stats["total"] += 1
+                e = (row.get("barcode") or "").strip()
+                s = (row.get("cProd") or "").strip()
+                has_e = bool(e and e in eans)
+                has_s = bool(s and s in skus)
+                if has_e and has_s:
+                    stats["both"] += 1
+                elif has_e:
+                    stats["ean_in_catalog"] += 1
+                elif has_s:
+                    stats["sku_in_catalog"] += 1
+                else:
+                    stats["neither"] += 1
+        return stats
+
+    # Append to Markdown
+    md_extra = ["", "## Pendências vs. Catálogo", ""]
+    md_extra.append("| Variante | Total pendências | EAN no catálogo | SKU no catálogo | Ambos | Nenhum |")
+    md_extra.append("|---|---:|---:|---:|---:|---:|")
+    for v in VARIANTS:
+        st = compare_pendings_for(v)
+        md_extra.append(f"| {v} | {st['total']} | {st['ean_in_catalog']} | {st['sku_in_catalog']} | {st['both']} | {st['neither']} |")
+    with (reports / "summary.md").open("a", encoding="utf-8") as f:
+        f.write("\n".join(md_extra) + "\n")
+
+    # Append to HTML
+    headers = ["Variante", "Total pendências", "EAN no catálogo", "SKU no catálogo", "Ambos", "Nenhum"]
+    rows = []
+    for v in VARIANTS:
+        st = compare_pendings_for(v)
+        rows.append([v, st['total'], st['ean_in_catalog'], st['sku_in_catalog'], st['both'], st['neither']])
+    with (reports / "summary.html").open("a", encoding="utf-8") as f:
+        f.write("<h2>Pendências vs. Catálogo</h2>" + render_table(headers, rows))
+
 
 if __name__ == "__main__":
     main()
