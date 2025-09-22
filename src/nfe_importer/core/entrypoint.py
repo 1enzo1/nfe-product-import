@@ -120,6 +120,26 @@ def run(*, mode: str, data_dir: str, out_path: str, config_path: str = "config.y
 
     # Collect metrics
     summary = result.summary
+    # Map invoices for lookups
+    invoice_paths = {inv.access_key: str(inv.file_path) for inv in summary.invoices}
+    invoice_items_total = {inv.access_key: len(inv.items) for inv in summary.invoices}
+    # Per-invoice aggregation
+    from collections import Counter
+    matched_keys = Counter(md.item.invoice_key for md in summary.matched)
+    unmatched_keys = Counter(um.item.invoice_key for um in summary.unmatched)
+    per_invoice = []
+    for access_key, total in invoice_items_total.items():
+        m = int(matched_keys.get(access_key, 0))
+        u = int(unmatched_keys.get(access_key, 0))
+        per_invoice.append({
+            "access_key": access_key,
+            "file_path": invoice_paths.get(access_key),
+            "items_total": int(total),
+            "matched": m,
+            "unmatched": u,
+            "pct_matched": round(100 * m / total, 2) if total else 0.0,
+        })
+
     metrics = {
         "variant": mode,
         "run_id": summary.run_id,
@@ -129,6 +149,7 @@ def run(*, mode: str, data_dir: str, out_path: str, config_path: str = "config.y
         "unmatched": len(summary.unmatched),
         "csv": str(out_csv_path),
         "pendings_csv": str(pendings_out) if pendings_out else None,
+        "per_invoice": per_invoice,
     }
 
     # Header validation against expected columns
@@ -169,6 +190,31 @@ def run(*, mode: str, data_dir: str, out_path: str, config_path: str = "config.y
         else:
             buckets["low"] += 1
     metrics["confidence_buckets"] = buckets
+
+    # Detailed samples of first 5 pendings with suggestions
+    pend_samples = []
+    for pending in summary.unmatched[:5]:
+        item = pending.item
+        suggs = []
+        for s in (pending.suggestions or [])[:3]:
+            try:
+                suggs.append({
+                    "sku": s.product.sku,
+                    "title": s.product.title,
+                    "confidence": round(float(getattr(s, "confidence", 0.0) or 0.0), 3),
+                })
+            except Exception:
+                continue
+        pend_samples.append({
+            "invoice_key": item.invoice_key,
+            "file_path": invoice_paths.get(item.invoice_key),
+            "cProd": item.sku,
+            "barcode": item.barcode,
+            "description": item.description,
+            "reason": pending.reason,
+            "top_suggestions": suggs,
+        })
+    metrics["pendings_samples"] = pend_samples
 
     # Persist metrics before potential exit
     _save_metrics(out_dir, metrics)

@@ -155,6 +155,49 @@ def main():
         md_lines.append(f"- buckets: high={buckets.get('high',0)}, mid={buckets.get('mid',0)}, low={buckets.get('low',0)}")
         md_lines.append("")
 
+    # Per-XML breakdown
+    md_lines += ["", "## Por XML (por variante)", ""]
+    for v in VARIANTS:
+        metrics_path = OUT_DIRS[v] / "metrics.json"
+        if not metrics_path.exists():
+            continue
+        try:
+            base = json.loads(metrics_path.read_text(encoding="utf-8"))
+        except Exception:
+            base = {}
+        table = base.get("per_invoice") or []
+        if table:
+            md_lines.append(f"### {v}")
+            md_lines.append("| Arquivo | Itens | Matched | Unmatched | % Matched |")
+            md_lines.append("|---|---:|---:|---:|---:|")
+            for row in table:
+                fname = (row.get("file_path") or "").split("\\")[-1].split("/")[-1]
+                md_lines.append(f"| {fname} | {row.get('items_total',0)} | {row.get('matched',0)} | {row.get('unmatched',0)} | {row.get('pct_matched',0)} |")
+            md_lines.append("")
+
+    # Detailed pendings samples
+    md_lines += ["", "## Pendências (amostras detalhadas)", ""]
+    for v in VARIANTS:
+        metrics_path = OUT_DIRS[v] / "metrics.json"
+        if not metrics_path.exists():
+            continue
+        try:
+            base = json.loads(metrics_path.read_text(encoding="utf-8"))
+        except Exception:
+            base = {}
+        samples = base.get("pendings_samples") or []
+        md_lines.append(f"### {v}")
+        if samples:
+            md_lines.append("| Arquivo | cProd | barcode | description | reason | top_suggestions |")
+            md_lines.append("|---|---|---|---|---|---|")
+            for s in samples:
+                fname = (s.get("file_path") or "").split("\\")[-1].split("/")[-1]
+                tops = "; ".join([f"{x.get('sku')} ({x.get('confidence')})" for x in (s.get('top_suggestions') or [])])
+                md_lines.append(f"| {fname} | {s.get('cProd','')} | {s.get('barcode','')} | {s.get('description','').replace('|','/')} | {s.get('reason','')} | {tops} |")
+        else:
+            md_lines.append("- (sem pendências)")
+        md_lines.append("")
+
     md_lines += ["", "## Erros por campo", ""]
     for r in results:
         md_lines.append(f"### {r['variant']}")
