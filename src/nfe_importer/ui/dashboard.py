@@ -161,10 +161,10 @@ def main() -> None:
     settings = _load_settings_with_fallback(args.config)
     processor = Processor(settings)
 
-    st.set_page_config(page_title="ConciliaÃ§Ã£o de NF-e", layout="wide")
-    st.title("AutomaÃ§Ã£o de ImportaÃ§Ã£o de NF-e")
+    st.set_page_config(page_title="Conciliação de NF-e", layout="wide")
+    st.title("Automação de Importação de NF-e")
 
-    st.sidebar.header("Nova execuÃ§Ã£o")
+    st.sidebar.header("Nova execução")
     uploaded_files = st.sidebar.file_uploader("Carregar NF-e (XML)", type="xml", accept_multiple_files=True)
     current_user = st.sidebar.text_input("UsuÃ¡rio", value=st.session_state.get("current_user", ""))
     st.session_state["current_user"] = current_user
@@ -190,6 +190,10 @@ def main() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     main()
+
+
+
+
 
 
 
