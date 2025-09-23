@@ -100,9 +100,9 @@ def show_pending_items(processor: Processor, run: dict) -> None:
     selected_key = st.selectbox("Selecione um item para conciliar", list(item_options.keys()))
     selected_row = pendings_df.iloc[item_options[selected_key]]
 
-    st.markdown("### SugestÃµes do catÃ¡logo")
-    suggestions = [part.split("|") for part in str(selected_row.get("suggestions", "")).split("
-") if part]
+    st.markdown("### Sugestões do catálogo")
+    suggestions_raw = str(selected_row.get("suggestions", ""))
+    suggestions = [part.split("|") for part in suggestions_raw.splitlines() if part]
     if suggestions:
         suggestion_labels = [f"{sku.strip()} - {title.strip()} ({score.strip()})" for sku, title, score in suggestions]
         selected_suggestion = st.radio("Selecione o SKU correto", suggestion_labels)
