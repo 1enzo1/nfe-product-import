@@ -14,7 +14,6 @@ from typing import List, Optional, TYPE_CHECKING
 
 import pandas as pd
 import streamlit as st
-from nfe_importer.core.parser import CatalogLoader
 
 # Make sure the package is importable when running via "streamlit run"
 import sys
@@ -27,6 +26,7 @@ if str(_SRC_PATH) not in sys.path:
 
 from nfe_importer.config import Settings
 from nfe_importer.core.pipeline import Processor
+from nfe_importer.core.parser import CatalogLoader
 
 if TYPE_CHECKING:  # pragma: no cover - only for type checkers
     from streamlit.runtime.uploaded_file_manager import UploadedFile
