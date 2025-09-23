@@ -98,11 +98,14 @@ class CSVGenerator:
             self._fill_metafields(row, cfops=cfops, ncms=ncms, cests=cests, units=units)
 
         dataframe = pd.DataFrame(rows.values())
-        for column in self.settings.csv_output.columns:
+        # Ensure all expected output columns exist (CSV + metafields)
+        expected_csv_columns = list(self.settings.csv_output.columns)
+        expected_meta_columns = self._metafield_columns()
+        for column in expected_csv_columns + expected_meta_columns:
             if column not in dataframe.columns:
                 dataframe[column] = ""
 
-        dataframe = dataframe[self.settings.csv_output.columns + self._metafield_columns()]
+        dataframe = dataframe[expected_csv_columns + expected_meta_columns]
         return dataframe.fillna("")
 
     def _base_row(self, product: CatalogProduct) -> Dict[str, object]:
