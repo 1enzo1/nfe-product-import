@@ -1,4 +1,4 @@
-"""Streamlit dashboard used to reconcile pending items.
+﻿"""Streamlit dashboard used to reconcile pending items.
 
 Notes for Streamlit Cloud deployment:
 - This app expects the project package to be importable as ``nfe_importer``.
@@ -12,8 +12,7 @@ import argparse
 from pathlib import Path
 from typing import List, Optional, TYPE_CHECKING
 
-import pandas as pd
-import streamlit as st
+import pandas as pd\nimport streamlit as st\nfrom nfe_importer.core.parser import CatalogLoader
 
 # Make sure the package is importable when running via "streamlit run"
 import sys
@@ -31,9 +30,7 @@ if TYPE_CHECKING:  # pragma: no cover - only for type checkers
     from streamlit.runtime.uploaded_file_manager import UploadedFile
 
 
-@st.cache_data(show_spinner=False)
-def load_catalog(processor: Processor) -> pd.DataFrame:
-    return processor.catalog_loader.load_dataframe()
+@st.cache_data(show_spinner=False)\r\ndef load_catalog_from_file(excel_path: str):\r\n    loader = CatalogLoader(Path(excel_path))\r\n    return loader.load_dataframe()
 
 
 def parse_args() -> argparse.Namespace:
@@ -56,19 +53,19 @@ def save_uploaded_files(files: List["UploadedFile"], target_folder: Path) -> Lis
 def render_summary(processor: Processor) -> Optional[dict]:
     runs = processor.list_runs()
     if not runs:
-        st.info("Nenhuma execução registrada até o momento.")
+        st.info("Nenhuma execuÃ§Ã£o registrada atÃ© o momento.")
         return None
 
     run_options = {f"{run['run_id']} ({run.get('created_at', '')})": run for run in runs}
-    selected = st.sidebar.selectbox("Execuções anteriores", list(run_options.keys()))
+    selected = st.sidebar.selectbox("ExecuÃ§Ãµes anteriores", list(run_options.keys()))
     run = run_options[selected]
 
-    st.subheader("Resumo da execução")
+    st.subheader("Resumo da execuÃ§Ã£o")
     st.metric("Itens conciliados", run.get("matched_count", 0))
     st.metric("Itens pendentes", run.get("unmatched_count", 0))
     st.write(f"CSV: {run.get('csv_path')}")
     if run.get("pendings_path"):
-        st.write(f"Pendências: {run.get('pendings_path')}")
+        st.write(f"PendÃªncias: {run.get('pendings_path')}")
     return run
 
 
@@ -85,7 +82,7 @@ def load_pendings(run: dict) -> pd.DataFrame:
 def show_pending_items(processor: Processor, run: dict) -> None:
     pendings_df = load_pendings(run)
     if pendings_df.empty:
-        st.success("Sem pendências para conciliação! 🎉")
+        st.success("Sem pendÃªncias para conciliaÃ§Ã£o! ðŸŽ‰")
         return
 
     st.subheader("Itens pendentes")
@@ -98,7 +95,7 @@ def show_pending_items(processor: Processor, run: dict) -> None:
     selected_key = st.selectbox("Selecione um item para conciliar", list(item_options.keys()))
     selected_row = pendings_df.iloc[item_options[selected_key]]
 
-    st.markdown("### Sugestões do catálogo")
+    st.markdown("### SugestÃµes do catÃ¡logo")
     suggestions = [part.split("|") for part in str(selected_row.get("suggestions", "")).split("\n") if part]
     if suggestions:
         suggestion_labels = [f"{sku.strip()} - {title.strip()} ({score.strip()})" for sku, title, score in suggestions]
@@ -106,10 +103,10 @@ def show_pending_items(processor: Processor, run: dict) -> None:
         selected_index = suggestion_labels.index(selected_suggestion)
         chosen_sku = suggestions[selected_index][0].strip()
     else:
-        st.warning("Nenhuma sugestão disponível para este item.")
-        chosen_sku = st.text_input("Informe manualmente o SKU do catálogo")
+        st.warning("Nenhuma sugestÃ£o disponÃ­vel para este item.")
+        chosen_sku = st.text_input("Informe manualmente o SKU do catÃ¡logo")
 
-    if st.button("Salvar equivalência") and chosen_sku:
+    if st.button("Salvar equivalÃªncia") and chosen_sku:
         processor.register_manual_match(
             sku=chosen_sku,
             cprod=selected_row.get("cProd"),
@@ -119,13 +116,13 @@ def show_pending_items(processor: Processor, run: dict) -> None:
             item_number=int(selected_row.get("item_number")),
             user=st.session_state.get("current_user"),
         )
-        st.success("Equivalência registrada! Ela será aplicada na próxima execução.")
+        st.success("EquivalÃªncia registrada! Ela serÃ¡ aplicada na prÃ³xima execuÃ§Ã£o.")
 
 
 def show_catalog_search(processor: Processor) -> None:
-    st.sidebar.header("Pesquisar no catálogo")
-    catalog_df = load_catalog(processor)
-    query = st.sidebar.text_input("Buscar por descrição/SKU")
+    st.sidebar.header("Pesquisar no catÃ¡logo")
+    excel_path = str(processor.catalog_loader.excel_path)\r\n    catalog_df = load_catalog_from_file(excel_path)
+    query = st.sidebar.text_input("Buscar por descriÃ§Ã£o/SKU")
     filtered = catalog_df
     if query:
         query_lower = query.lower()
@@ -157,12 +154,12 @@ def main() -> None:
     settings = _load_settings_with_fallback(args.config)
     processor = Processor(settings)
 
-    st.set_page_config(page_title="Conciliação de NF-e", layout="wide")
-    st.title("Automação de Importação de NF-e")
+    st.set_page_config(page_title="ConciliaÃ§Ã£o de NF-e", layout="wide")
+    st.title("AutomaÃ§Ã£o de ImportaÃ§Ã£o de NF-e")
 
-    st.sidebar.header("Nova execução")
+    st.sidebar.header("Nova execuÃ§Ã£o")
     uploaded_files = st.sidebar.file_uploader("Carregar NF-e (XML)", type="xml", accept_multiple_files=True)
-    current_user = st.sidebar.text_input("Usuário", value=st.session_state.get("current_user", ""))
+    current_user = st.sidebar.text_input("UsuÃ¡rio", value=st.session_state.get("current_user", ""))
     st.session_state["current_user"] = current_user
 
     if uploaded_files:
@@ -175,7 +172,7 @@ def main() -> None:
         if result is None:
             st.warning("Nenhum arquivo encontrado para processamento.")
         else:
-            st.success(f"Processamento concluído. CSV: {result.dataframe_path}")
+            st.success(f"Processamento concluÃ­do. CSV: {result.dataframe_path}")
 
     run = render_summary(processor)
     if run:
@@ -186,4 +183,5 @@ def main() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     main()
+
 
