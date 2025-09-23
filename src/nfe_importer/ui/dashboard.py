@@ -30,7 +30,10 @@ if TYPE_CHECKING:  # pragma: no cover - only for type checkers
     from streamlit.runtime.uploaded_file_manager import UploadedFile
 
 
-@st.cache_data(show_spinner=False)\r\ndef load_catalog_from_file(excel_path: str):\r\n    loader = CatalogLoader(Path(excel_path))\r\n    return loader.load_dataframe()
+@st.cache_data(show_spinner=False)
+def load_catalog_from_file(excel_path: str):
+    loader = CatalogLoader(Path(excel_path))
+    return loader.load_dataframe()
 
 
 def parse_args() -> argparse.Namespace:
@@ -121,7 +124,8 @@ def show_pending_items(processor: Processor, run: dict) -> None:
 
 def show_catalog_search(processor: Processor) -> None:
     st.sidebar.header("Pesquisar no catÃ¡logo")
-    excel_path = str(processor.catalog_loader.excel_path)\r\n    catalog_df = load_catalog_from_file(excel_path)
+    excel_path = str(processor.catalog_loader.excel_path)
+    catalog_df = load_catalog_from_file(excel_path)
     query = st.sidebar.text_input("Buscar por descriÃ§Ã£o/SKU")
     filtered = catalog_df
     if query:
@@ -183,5 +187,6 @@ def main() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     main()
+
 
 
