@@ -12,7 +12,9 @@ import argparse
 from pathlib import Path
 from typing import List, Optional, TYPE_CHECKING
 
-import pandas as pd\nimport streamlit as st\nfrom nfe_importer.core.parser import CatalogLoader
+import pandas as pd
+import streamlit as st
+from nfe_importer.core.parser import CatalogLoader
 
 # Make sure the package is importable when running via "streamlit run"
 import sys
@@ -99,7 +101,8 @@ def show_pending_items(processor: Processor, run: dict) -> None:
     selected_row = pendings_df.iloc[item_options[selected_key]]
 
     st.markdown("### SugestÃµes do catÃ¡logo")
-    suggestions = [part.split("|") for part in str(selected_row.get("suggestions", "")).split("\n") if part]
+    suggestions = [part.split("|") for part in str(selected_row.get("suggestions", "")).split("
+") if part]
     if suggestions:
         suggestion_labels = [f"{sku.strip()} - {title.strip()} ({score.strip()})" for sku, title, score in suggestions]
         selected_suggestion = st.radio("Selecione o SKU correto", suggestion_labels)
@@ -187,6 +190,7 @@ def main() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     main()
+
 
 
 
