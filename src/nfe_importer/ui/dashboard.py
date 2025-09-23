@@ -179,8 +179,22 @@ def main() -> None:
         if result is None:
             st.warning("Nenhum arquivo encontrado para processamento.")
         else:
-            st.success(f"Processamento concluÃ­do. CSV: {result.dataframe_path}")
+            st.success("Processamento concluído.")
 
+            try:
+                from pathlib import Path as _P
+                _csv = _P(str(result.dataframe_path))
+                if _csv.exists():
+                    st.download_button("Baixar CSV gerado", data=_csv.read_bytes(), file_name=_csv.name, mime="text/csv")
+            except Exception:
+                pass
+            try:
+                if result.pendings_path:
+                    _pend = _P(str(result.pendings_path))
+                    if _pend.exists():
+                        st.download_button("Baixar Pendências", data=_pend.read_bytes(), file_name=_pend.name, mime="text/csv")
+            except Exception:
+                pass
     run = render_summary(processor)
     if run:
         show_pending_items(processor, run)
@@ -190,6 +204,8 @@ def main() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     main()
+
+
 
 
 
