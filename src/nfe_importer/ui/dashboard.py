@@ -17,8 +17,12 @@ import streamlit as st
 
 # Make sure the package is importable when running via "streamlit run"
 import sys
-_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(_ROOT / "src"))
+# Path layout: <repo>/src/nfe_importer/ui/dashboard.py
+# parents[0]=ui, [1]=nfe_importer, [2]=src, [3]=repo root
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_SRC_PATH = _REPO_ROOT / "src"
+if str(_SRC_PATH) not in sys.path:
+    sys.path.insert(0, str(_SRC_PATH))
 
 from nfe_importer.config import Settings
 from nfe_importer.core.pipeline import Processor
