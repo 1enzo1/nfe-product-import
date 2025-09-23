@@ -171,7 +171,7 @@ def main() -> None:
 
     if uploaded_files:
         saved_paths = save_uploaded_files(uploaded_files, settings.paths.nfe_input_folder)
-        st.sidebar.success(f"{len(saved_paths)} arquivo(s) salvo(s) na pasta de entrada.")
+        st.sidebar.success(f"{len(saved_paths)} arquivo(s) carregado(s).")
 
     if st.sidebar.button("Processar agora"):
         with st.spinner("Processando arquivos..."):
@@ -190,6 +190,7 @@ def main() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     main()
+
 
 
 
