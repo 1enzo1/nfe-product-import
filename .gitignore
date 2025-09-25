@@ -21,3 +21,10 @@ data/master/*
 # Logs and databases
 *.log
 *.db
+
+# Local backups e artefatos temporários
+_dump.txt
+_gen_backup.txt
+
+# Arena de experimentos (não versionar)
+arena/
