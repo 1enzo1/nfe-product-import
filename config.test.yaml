@@ -1,5 +1,5 @@
 ﻿paths:
-  nfe_input_folder: "data/"
+  nfe_input_folder: "example_docs/"
   master_data_file: "example_docs/MART-Ficha-tecnica-Biblioteca-Virtual-08-08-2025.xlsx"
   output_folder: "output/"
   log_folder: "logs/"

@@ -98,10 +98,29 @@ class CSVGenerator:
             self._fill_metafields(row, cfops=cfops, ncms=ncms, cests=cests, units=units)
 
         dataframe = pd.DataFrame(rows.values())
-        # Ensure all expected output columns exist (CSV + metafields)
+
+        # Map internal canonical columns to Shopify Variant template columns when requested
+        # This enables producing CSVs aligned with a provided header (e.g., example template)
+        column_map: Dict[str, str] = {
+            "SKU": "Variant SKU",
+            "Price": "Variant Price",
+            "Compare At Price": "Variant Compare At Price",
+            "Inventory Qty": "Variant Inventory Qty",
+            "Weight": "Variant Weight",
+            "Barcode": "Variant Barcode",
+            "Product Type": "Type",
+        }
+        for src, dst in column_map.items():
+            if src in dataframe.columns:
+                dataframe[dst] = dataframe[src]
+
+        # Ensure all expected output columns exist (CSV + metafields) without duplicates
         expected_csv_columns = list(self.settings.csv_output.columns)
         expected_meta_columns = self._metafield_columns()
-        expected_columns = expected_csv_columns + expected_meta_columns
+        expected_columns: List[str] = []
+        for col in [*expected_csv_columns, *expected_meta_columns]:
+            if col not in expected_columns:
+                expected_columns.append(col)
         for column in expected_columns:
             if column not in dataframe.columns:
                 dataframe[column] = ""
@@ -113,7 +132,7 @@ class CSVGenerator:
     def _base_row(self, product: CatalogProduct) -> Dict[str, object]:
         row: Dict[str, object] = {
             "Handle": slugify(product.title or product.sku),
-            "Title": product.title,
+            "Title": self._refine_title(product.title),
             "Vendor": product.vendor or self.settings.default_vendor or "",
             "Product Type": product.product_type or "",
             "SKU": product.sku,
@@ -128,6 +147,30 @@ class CSVGenerator:
         if product.metafields:
             row["composition"] = product.metafields.get("composition", "")
         return row
+
+    @staticmethod
+    def _refine_title(title: Optional[str]) -> str:
+        """Refine product title for CSV output.
+
+        Rules:
+        - first alphabetical character uppercase, all others lowercase;
+        - if there's a hyphen ('-'), uppercase the next alphabetical character
+          after the hyphen (brand-title style: "Marca - Produto").
+        """
+        if not title:
+            return ""
+        s = str(title).strip().lower()
+        result_chars = []
+        capitalize_next = True
+        for ch in s:
+            if ch.isalpha() and capitalize_next:
+                result_chars.append(ch.upper())
+                capitalize_next = False
+            else:
+                result_chars.append(ch)
+            if ch == '-':
+                capitalize_next = True
+        return "".join(result_chars)
 
     def _compute_price(self, row: Dict[str, object], cost_per_item: float) -> object:
         strategy = self.settings.pricing.strategy
