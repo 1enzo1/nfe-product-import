@@ -145,7 +145,10 @@ def _load_settings_with_fallback(config_path: str) -> Settings:
     This improves UX on Streamlit Cloud, where only the repository files are
     available and a local data/ folder may be empty.
     """
-    settings = Settings.load(config_path)
+    cfg_path = Path(config_path)
+    if not cfg_path.exists():
+        cfg_path = Path("config.yaml")
+    settings = Settings.load(str(cfg_path))
     # If the configured master_data_file doesn't exist, try to discover one
     mfile = Path(settings.paths.master_data_file)
     if not mfile.exists():
@@ -156,9 +159,55 @@ def _load_settings_with_fallback(config_path: str) -> Settings:
     return settings
 
 
+def _discover_versions(default_config: str) -> list[tuple[str, Path]]:
+    """Discover available versioned configs.
+
+    Returns a list of (label, path) where the first item is always the
+    current default config.
+    """
+    repo_root = _REPO_ROOT
+    versions: list[tuple[str, Path]] = [("Padrão (config.yaml)", Path(default_config).resolve())]
+
+    # pipelines/<name>/config.yaml or config_<name>.yaml
+    pipelines_dir = repo_root / "pipelines"
+    if pipelines_dir.exists():
+        for sub in pipelines_dir.iterdir():
+            if not sub.is_dir():
+                continue
+            cfg = sub / "config.yaml"
+            if not cfg.exists():
+                alt = sub / f"config_{sub.name}.yaml"
+                cfg = alt if alt.exists() else cfg
+            if cfg.exists():
+                label = sub.name.replace("_", " ").replace("-", " ")
+                versions.append((label, cfg.resolve()))
+
+    # Root-level config.<name>.yaml
+    for cfg in repo_root.glob("config.*.yaml"):
+        label = cfg.stem.split(".", 1)[1].replace("_", " ").replace("-", " ")
+        versions.append((label, cfg.resolve()))
+
+    # Deduplicate by absolute path preserving order
+    dedup: list[tuple[str, Path]] = []
+    seen = set()
+    for label, path in versions:
+        ap = str(path)
+        if ap in seen:
+            continue
+        seen.add(ap)
+        dedup.append((label, path))
+    return dedup
+
+
 def main() -> None:
     args = parse_args()
-    settings = _load_settings_with_fallback(args.config)
+    versions = _discover_versions(args.config)
+    st.sidebar.header("Versão do processamento")
+    version_labels = [label for label, _ in versions]
+    selected_label = st.sidebar.selectbox("Selecione a versão", version_labels, index=0)
+    selected_path = next(path for label, path in versions if label == selected_label)
+
+    settings = _load_settings_with_fallback(str(selected_path))
     processor = Processor(settings)
 
     st.set_page_config(page_title="Conciliação de NF-e", layout="wide")
@@ -166,6 +215,7 @@ def main() -> None:
 
     st.sidebar.header("Nova execução")
     uploaded_files = st.sidebar.file_uploader("Carregar NF-e (XML)", type="xml", accept_multiple_files=True)
+    st.sidebar.caption(f"Config: {selected_path}")
     current_user = st.sidebar.text_input("UsuÃ¡rio", value=st.session_state.get("current_user", ""))
     st.session_state["current_user"] = current_user
 
@@ -175,7 +225,7 @@ def main() -> None:
 
     if st.sidebar.button("Processar agora"):
         with st.spinner("Processando arquivos..."):
-            result = processor.process_directory(mode="ui", user=current_user)
+            result = processor.process_directory(mode=f"ui:{selected_label}", user=current_user)
         if result is None:
             st.warning("Nenhum arquivo encontrado para processamento.")
         else:
