@@ -100,3 +100,41 @@ Os testes utilizam os arquivos de exemplo presentes em `example_docs/` para vali
 CSV.
 
 
+### Selecionando versoes no dashboard
+
+A UI agora lista automaticamente as configuracoes encontradas em pipelines/**/config.yaml.
+Cada versao (V1, V2, Enhanced, Super) aparece com o caminho da configuracao ao lado. Basta
+abrir o painel com:
+
+`ash
+python -m nfe_importer.main ui --config config.yaml
+`
+
+Na barra lateral selecione a versao desejada, carregue os XML e clique em "Processar agora".
+O arquivo de saida e gravado na pasta informada pelo YAML da versao (output/<versao>/).
+O log tambem guarda mode="ui:<versao>" para rastreabilidade.
+
+### Configs por versao
+
+Os YAMLs de referencia ficam em:
+
+- pipelines/v1/config.yaml
+- pipelines/v2/config.yaml
+- pipelines/enhanced/config.yaml
+- pipelines/super/config.yaml
+
+Todos compartilham o mesmo cabeçalho Shopify e mantem os defaults:
+Variant Fulfillment Service=manual, Variant Inventory Policy=deny,
+Variant Inventory Tracker=shopify, Variant Requires Shipping=TRUE e
+Variant Taxable=TRUE.
+
+### Smoke tests rapidos
+
+Para validar as quatro versoes com os XMLs de exemplo, execute:
+
+`ash
+.\.venv\Scripts\python scripts/run_smoke_tests.py
+`
+
+O script gera um CSV por versao e cria eports/scoreboard.csv com o resultado
+(checks de header, variantes unicas, politicas Shopify e regra g/kg).

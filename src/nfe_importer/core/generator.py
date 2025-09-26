@@ -118,8 +118,14 @@ class CSVGenerator:
             # Shipping and weight
             weight = row.get("Weight")
             if isinstance(weight, (int, float)) and float(weight) > 0:
-                row["Variant Weight"] = weight
-                row.setdefault("Variant Weight Unit", "kg")
+                v = float(weight)
+                # If < 1 kg, export as grams to match guidance
+                if v < 1.0:
+                    row["Variant Weight"] = round(v * 1000, 3)
+                    row["Variant Weight Unit"] = "g"
+                else:
+                    row["Variant Weight"] = v
+                    row.setdefault("Variant Weight Unit", "kg")
                 row.setdefault("Variant Requires Shipping", "TRUE")
             else:
                 row.setdefault("Variant Requires Shipping", "TRUE")
@@ -138,9 +144,9 @@ class CSVGenerator:
 
             # Body (HTML): prefer catalogue features or composition if present
             if not row.get("Body (HTML)"):
-                features = row.get("_features") or ""
-                composition = row.get("composition") or ""
-                inf_ad = row.get("_infAdProd") or ""
+                features = self._clean_text(row.get("_features") or "")
+                composition = self._clean_text(row.get("composition") or "")
+                inf_ad = self._clean_text(row.get("_infAdProd") or "")
                 parts = [p for p in [features, composition, inf_ad] if p]
                 if parts:
                     row["Body (HTML)"] = "\n\n".join(parts)
@@ -177,7 +183,22 @@ class CSVGenerator:
 
         # Robust reindex to avoid KeyError even when some columns are missing
         dataframe = dataframe.reindex(columns=expected_columns, fill_value="")
-        return dataframe.fillna("")
+        df = dataframe.fillna("")
+
+        # Ensure Option1 values are unique per Handle when multiple rows exist.
+        if "Handle" in df.columns and "Option1 Value" in df.columns:
+            for handle, grp in df.groupby("Handle"):
+                if len(grp) <= 1:
+                    continue
+                seen_counts: Dict[str, int] = {}
+                for idx, val in grp["Option1 Value"].items():
+                    base = val or "Default Title"
+                    n = seen_counts.get(base, 0) + 1
+                    seen_counts[base] = n
+                    new_val = base if n == 1 else f"{base}-{n}"
+                    df.at[idx, "Option1 Value"] = new_val
+
+        return df
 
     def _base_row(self, product: CatalogProduct) -> Dict[str, object]:
         row: Dict[str, object] = {
@@ -201,10 +222,33 @@ class CSVGenerator:
             "Variant Taxable": "TRUE",
         }
         if product.metafields:
-            row["composition"] = product.metafields.get("composition", "")
+            row["composition"] = self._clean_text(product.metafields.get("composition", ""))
         if product.extra:
-            row["_features"] = product.extra.get("features", "")
+            row["_features"] = self._clean_text(product.extra.get("features", ""))
+            # Dynamic metafields mapping from catalogue extra columns
+            dm = getattr(self.settings.metafields, "dynamic_mapping", None)
+            if dm and dm.enabled and isinstance(dm.map, dict):
+                ns = self.settings.metafields.namespace
+                for meta_key, col in dm.map.items():
+                    if not col:
+                        continue
+                    val = product.extra.get(col) or product.extra.get(str(col).lower())
+                    if val is None:
+                        continue
+                    text = str(val).strip()
+                    if text and text.lower() != "nan":
+                        row[f"product.metafields.{ns}.{meta_key}"] = text
         return row
+
+    @staticmethod
+    def _clean_text(value: Optional[str]) -> str:
+        if not value:
+            return ""
+        s = str(value).replace("_x000D_", " ")
+        s = s.replace("\r\n", "\n").replace("\r", "\n")
+        # collapse consecutive whitespace but keep single newlines
+        parts = [" ".join(line.split()).strip() for line in s.split("\n")]
+        return "\n".join([p for p in parts if p])
 
     @staticmethod
     def _refine_title(title: Optional[str]) -> str:

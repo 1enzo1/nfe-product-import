@@ -86,6 +86,35 @@ class CSVOutputConfig(BaseModel):
 class MetafieldsConfig(BaseModel):
     namespace: str = Field("custom", description="Shopify metafield namespace")
     keys: Dict[str, str] = Field(default_factory=dict, description="Mapping of logical names to metafield keys")
+    class DynamicMap(BaseModel):
+        enabled: bool = Field(False, description="Enable dynamic mapping from catalogue columns to metafield keys")
+        map: Dict[str, str] = Field(default_factory=dict, description="CSV metafield key -> catalogue column")
+
+    dynamic_mapping: DynamicMap = Field(default_factory=DynamicMap)
+
+
+class VariantOptionConfig(BaseModel):
+    name: str = Field("Title", description="Shopify option display name (e.g., Color)")
+    column: Optional[str] = Field(
+        default=None,
+        description="Catalogue column (sanitised) used to source the option value (e.g., 'cor', 'tamanho')",
+    )
+
+
+class VariantsConfig(BaseModel):
+    enabled: bool = Field(False, description="Enable variant detection from catalogue columns")
+    option1: VariantOptionConfig = Field(default_factory=VariantOptionConfig)
+    option2: VariantOptionConfig = Field(default_factory=VariantOptionConfig)
+
+
+class WeightsConfig(BaseModel):
+    dynamic_unit: bool = Field(False, description="If true, choose Variant Weight Unit dynamically per item")
+    column: str = Field("peso", description="Catalogue column name (sanitised) with numeric weight value")
+    unit_column: Optional[str] = Field(
+        default=None,
+        description="Optional catalogue column with the unit string (e.g., 'kg' or 'g')",
+    )
+    default_unit: str = Field("kg", description="Default unit to use when unit column is absent")
 
 
 class GoogleDriveConfig(BaseModel):
@@ -139,6 +168,8 @@ class Settings(BaseModel):
     pricing: PricingConfig = Field(default_factory=PricingConfig)
     csv_output: CSVOutputConfig
     metafields: MetafieldsConfig = Field(default_factory=MetafieldsConfig)
+    variants: VariantsConfig = Field(default_factory=VariantsConfig)
+    weights: WeightsConfig = Field(default_factory=WeightsConfig)
     google_drive: Optional[GoogleDriveConfig] = None
     watch: Optional[WatchConfig] = None
     default_vendor: Optional[str] = Field(
@@ -176,6 +207,8 @@ __all__ = [
     "PricingConfig",
     "CSVOutputConfig",
     "MetafieldsConfig",
+    "VariantsConfig",
+    "WeightsConfig",
     "GoogleDriveConfig",
     "WatchConfig",
 ]
