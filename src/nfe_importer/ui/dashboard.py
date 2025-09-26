@@ -278,3 +278,6 @@ def main() -> None:
         show_pending_items(processor, run)
 
     show_catalog_search(processor)
+if __name__ == "__main__":
+    # Permite executar via `streamlit run src/nfe_importer/ui/dashboard.py`
+    main()
