@@ -88,6 +88,20 @@ class MetafieldsConfig(BaseModel):
     keys: Dict[str, str] = Field(default_factory=dict, description="Mapping of logical names to metafield keys")
 
 
+class VariantOptionConfig(BaseModel):
+    name: str = Field("Title", description="Shopify option display name (e.g., Color)")
+    column: Optional[str] = Field(
+        default=None,
+        description="Catalogue column (sanitised) used to source the option value (e.g., 'cor', 'tamanho')",
+    )
+
+
+class VariantsConfig(BaseModel):
+    enabled: bool = Field(False, description="Enable variant detection from catalogue columns")
+    option1: VariantOptionConfig = Field(default_factory=VariantOptionConfig)
+    option2: VariantOptionConfig = Field(default_factory=VariantOptionConfig)
+
+
 class GoogleDriveConfig(BaseModel):
     """Optional Google Drive integration configuration."""
 
@@ -139,6 +153,7 @@ class Settings(BaseModel):
     pricing: PricingConfig = Field(default_factory=PricingConfig)
     csv_output: CSVOutputConfig
     metafields: MetafieldsConfig = Field(default_factory=MetafieldsConfig)
+    variants: VariantsConfig = Field(default_factory=VariantsConfig)
     google_drive: Optional[GoogleDriveConfig] = None
     watch: Optional[WatchConfig] = None
     default_vendor: Optional[str] = Field(
@@ -176,6 +191,7 @@ __all__ = [
     "PricingConfig",
     "CSVOutputConfig",
     "MetafieldsConfig",
+    "VariantsConfig",
     "GoogleDriveConfig",
     "WatchConfig",
 ]

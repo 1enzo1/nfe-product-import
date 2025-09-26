@@ -74,6 +74,26 @@ class CSVGenerator:
                 if info:
                     row["_infAdProd"] = str(info)
 
+            # Variants from catalogue (feature-flagged)
+            if getattr(self.settings, "variants", None) and self.settings.variants.enabled:
+                def _get_opt(col: Optional[str]) -> Optional[str]:
+                    if not col:
+                        return None
+                    v = None
+                    if isinstance(product.extra, dict):
+                        v = product.extra.get(col) or product.extra.get(str(col).lower())
+                    return str(v).strip() if v else None
+
+                cfg = self.settings.variants
+                v1 = _get_opt(cfg.option1.column)
+                v2 = _get_opt(cfg.option2.column)
+                if v1:
+                    row["Option1 Name"] = cfg.option1.name or "Title"
+                    row["Option1 Value"] = v1
+                if v2:
+                    row["Option2 Name"] = cfg.option2.name or ""
+                    row["Option2 Value"] = v2
+
             row["_total_qty"] += item.quantity
             row["_total_cost"] += item.quantity * item.unit_value
             if item.cfop:
@@ -163,6 +183,26 @@ class CSVGenerator:
         for src, dst in column_map.items():
             if src in dataframe.columns:
                 dataframe[dst] = dataframe[src]
+
+        # Ensure Variant SKU uniqueness per Handle when variants are enabled
+        if getattr(self.settings, "variants", None) and self.settings.variants.enabled:
+            if "Variant SKU" not in dataframe.columns and "SKU" in dataframe.columns:
+                dataframe["Variant SKU"] = dataframe["SKU"].astype(str)
+            if "Handle" in dataframe.columns:
+                grouped = dataframe.groupby("Handle")
+                for handle, dfh in grouped:
+                    seen = set()
+                    for idx, r in dfh.iterrows():
+                        sku_val = str(r.get("Variant SKU") or r.get("SKU") or "")
+                        if sku_val in seen and (r.get("Option1 Value") or r.get("Option2 Value")):
+                            suffix_parts = []
+                            if r.get("Option1 Value"):
+                                suffix_parts.append(str(r.get("Option1 Value")).upper().replace(" ", "-"))
+                            if r.get("Option2 Value"):
+                                suffix_parts.append(str(r.get("Option2 Value")).upper().replace(" ", "-"))
+                            sku_val = f"{sku_val}-{'-'.join(suffix_parts)}"
+                        seen.add(sku_val)
+                        dataframe.at[idx, "Variant SKU"] = sku_val
 
         # Ensure all expected output columns exist (CSV + metafields) without duplicates
         expected_csv_columns = list(self.settings.csv_output.columns)

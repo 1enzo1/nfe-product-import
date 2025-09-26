@@ -218,13 +218,41 @@ class CatalogLoader:
             if isinstance(composition_value, str) and composition_value.strip():
                 metafields["composition"] = composition_value.strip()
 
-            extra = {}
+            # Capture all additional columns into 'extra' so feature flags can map them later
+            extra: Dict[str, str] = {}
             features_value = data.get("features")
             if isinstance(features_value, str) and features_value.strip():
                 extra["features"] = features_value.strip()
             price_value = data.get("price")
             if isinstance(price_value, (int, float)):
                 extra["price"] = float(price_value)
+
+            # Any non-empty residual fields from 'data' not consumed above become part of 'extra'
+            consumed = {
+                "sku",
+                "title",
+                "barcode",
+                "vendor",
+                "product_type",
+                "collection",
+                "unit",
+                "ncm",
+                "cest",
+                "weight",
+                "tags",
+                "features",
+                "composition",
+                "cfop",
+                "price",
+            }
+            for key, value in data.items():
+                if key in consumed:
+                    continue
+                if value is None:
+                    continue
+                text = str(value).strip()
+                if text and text.lower() != "nan":
+                    extra[key] = text
 
             products.append(
                 CatalogProduct(
