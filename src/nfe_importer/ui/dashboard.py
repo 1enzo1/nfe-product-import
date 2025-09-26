@@ -1,4 +1,4 @@
-﻿"""Streamlit dashboard used to reconcile pending items.
+"""Streamlit dashboard used to reconcile pending items.
 
 Notes for Streamlit Cloud deployment:
 - This app expects the project package to be importable as ``nfe_importer``.
@@ -8,9 +8,8 @@ Notes for Streamlit Cloud deployment:
 
 from __future__ import annotations
 
-import argparse
-from pathlib import Path
-from typing import List, Optional, TYPE_CHECKING
+import argparse\r\nfrom dataclasses import dataclass\r\nfrom pathlib import Path
+from typing import Dict, List, Optional, TYPE_CHECKING
 
 import pandas as pd
 import streamlit as st
@@ -58,19 +57,19 @@ def save_uploaded_files(files: List["UploadedFile"], target_folder: Path) -> Lis
 def render_summary(processor: Processor) -> Optional[dict]:
     runs = processor.list_runs()
     if not runs:
-        st.info("Nenhuma execuÃ§Ã£o registrada atÃ© o momento.")
+        st.info("Nenhuma execuÃƒÂ§ÃƒÂ£o registrada atÃƒÂ© o momento.")
         return None
 
     run_options = {f"{run['run_id']} ({run.get('created_at', '')})": run for run in runs}
-    selected = st.sidebar.selectbox("ExecuÃ§Ãµes anteriores", list(run_options.keys()))
+    selected = st.sidebar.selectbox("ExecuÃƒÂ§ÃƒÂµes anteriores", list(run_options.keys()))
     run = run_options[selected]
 
-    st.subheader("Resumo da execuÃ§Ã£o")
+    st.subheader("Resumo da execuÃƒÂ§ÃƒÂ£o")
     st.metric("Itens conciliados", run.get("matched_count", 0))
     st.metric("Itens pendentes", run.get("unmatched_count", 0))
     st.write(f"CSV: {run.get('csv_path')}")
     if run.get("pendings_path"):
-        st.write(f"PendÃªncias: {run.get('pendings_path')}")
+        st.write(f"PendÃƒÂªncias: {run.get('pendings_path')}")
     return run
 
 
@@ -87,7 +86,7 @@ def load_pendings(run: dict) -> pd.DataFrame:
 def show_pending_items(processor: Processor, run: dict) -> None:
     pendings_df = load_pendings(run)
     if pendings_df.empty:
-        st.success("Sem pendÃªncias para conciliaÃ§Ã£o! ðŸŽ‰")
+        st.success("Sem pendÃƒÂªncias para conciliaÃƒÂ§ÃƒÂ£o! Ã°Å¸Å½â€°")
         return
 
     st.subheader("Itens pendentes")
@@ -100,7 +99,7 @@ def show_pending_items(processor: Processor, run: dict) -> None:
     selected_key = st.selectbox("Selecione um item para conciliar", list(item_options.keys()))
     selected_row = pendings_df.iloc[item_options[selected_key]]
 
-    st.markdown("### Sugestões do catálogo")
+    st.markdown("### SugestÃµes do catÃ¡logo")
     suggestions_raw = str(selected_row.get("suggestions", ""))
     suggestions = [part.split("|") for part in suggestions_raw.splitlines() if part]
     if suggestions:
@@ -109,10 +108,10 @@ def show_pending_items(processor: Processor, run: dict) -> None:
         selected_index = suggestion_labels.index(selected_suggestion)
         chosen_sku = suggestions[selected_index][0].strip()
     else:
-        st.warning("Nenhuma sugestÃ£o disponÃ­vel para este item.")
-        chosen_sku = st.text_input("Informe manualmente o SKU do catÃ¡logo")
+        st.warning("Nenhuma sugestÃƒÂ£o disponÃƒÂ­vel para este item.")
+        chosen_sku = st.text_input("Informe manualmente o SKU do catÃƒÂ¡logo")
 
-    if st.button("Salvar equivalÃªncia") and chosen_sku:
+    if st.button("Salvar equivalÃƒÂªncia") and chosen_sku:
         processor.register_manual_match(
             sku=chosen_sku,
             cprod=selected_row.get("cProd"),
@@ -122,14 +121,14 @@ def show_pending_items(processor: Processor, run: dict) -> None:
             item_number=int(selected_row.get("item_number")),
             user=st.session_state.get("current_user"),
         )
-        st.success("EquivalÃªncia registrada! Ela serÃ¡ aplicada na prÃ³xima execuÃ§Ã£o.")
+        st.success("EquivalÃƒÂªncia registrada! Ela serÃƒÂ¡ aplicada na prÃƒÂ³xima execuÃƒÂ§ÃƒÂ£o.")
 
 
 def show_catalog_search(processor: Processor) -> None:
-    st.sidebar.header("Pesquisar no catÃ¡logo")
+    st.sidebar.header("Pesquisar no catÃƒÂ¡logo")
     excel_path = str(processor.catalog_loader.excel_path)
     catalog_df = load_catalog_from_file(excel_path)
-    query = st.sidebar.text_input("Buscar por descriÃ§Ã£o/SKU")
+    query = st.sidebar.text_input("Buscar por descriÃƒÂ§ÃƒÂ£o/SKU")
     filtered = catalog_df
     if query:
         query_lower = query.lower()
@@ -159,64 +158,93 @@ def _load_settings_with_fallback(config_path: str) -> Settings:
     return settings
 
 
-def _discover_versions(default_config: str) -> list[tuple[str, Path]]:
-    """Discover available versioned configs.
+@dataclass(frozen=True)
+class PipelineVersion:
+    key: str
+    label: str
+    config_path: Path
 
-    Returns a list of (label, path) where the first item is always the
-    current default config.
-    """
+
+def _clean_label(name: str) -> str:
+    mapping = {
+        "default": "Default",
+        "v1": "V1",
+        "v2": "V2",
+        "enhanced": "Enhanced",
+        "super": "Super",
+    }
+    lower = name.lower()
+    if lower in mapping:
+        return mapping[lower]
+    return name.replace("_", " ").replace("-", " ").title()
+
+
+def _discover_versions(default_config: str) -> List[PipelineVersion]:
     repo_root = _REPO_ROOT
-    versions: list[tuple[str, Path]] = [("Padrão (config.yaml)", Path(default_config).resolve())]
+    versions: List[PipelineVersion] = []
+    seen: set[Path] = set()
 
-    # pipelines/<name>/config.yaml or config_<name>.yaml
+    def add_version(key: str, label: str, path: Path) -> None:
+        resolved = Path(path).expanduser().resolve()
+        if resolved in seen:
+            return
+        seen.add(resolved)
+        versions.append(PipelineVersion(key=key, label=_clean_label(label or key), config_path=resolved))
+
+    default_path = Path(default_config)
+    if not default_path.exists():
+        default_path = (repo_root / default_config)
+    add_version("default", "default", default_path)
+
     pipelines_dir = repo_root / "pipelines"
     if pipelines_dir.exists():
-        for sub in pipelines_dir.iterdir():
-            if not sub.is_dir():
-                continue
+        for sub in sorted([p for p in pipelines_dir.iterdir() if p.is_dir()], key=lambda p: p.name):
             cfg = sub / "config.yaml"
             if not cfg.exists():
                 alt = sub / f"config_{sub.name}.yaml"
-                cfg = alt if alt.exists() else cfg
+                if alt.exists():
+                    cfg = alt
             if cfg.exists():
-                label = sub.name.replace("_", " ").replace("-", " ")
-                versions.append((label, cfg.resolve()))
+                add_version(sub.name.lower(), sub.name, cfg)
 
-    # Root-level config.<name>.yaml
-    for cfg in repo_root.glob("config.*.yaml"):
-        label = cfg.stem.split(".", 1)[1].replace("_", " ").replace("-", " ")
-        versions.append((label, cfg.resolve()))
+    for cfg in sorted(repo_root.glob("config.*.yaml")):
+        key = cfg.stem.split(".", 1)[1]
+        add_version(key.lower(), key, cfg)
 
-    # Deduplicate by absolute path preserving order
-    dedup: list[tuple[str, Path]] = []
-    seen = set()
-    for label, path in versions:
-        ap = str(path)
-        if ap in seen:
-            continue
-        seen.add(ap)
-        dedup.append((label, path))
-    return dedup
+    preferred_order = {name: idx for idx, name in enumerate(["default", "v1", "v2", "enhanced", "super"])}
+    versions.sort(key=lambda v: (preferred_order.get(v.key.lower(), 99), v.label))
+    return versions
 
 
 def main() -> None:
     args = parse_args()
     versions = _discover_versions(args.config)
-    st.sidebar.header("Versão do processamento")
-    version_labels = [label for label, _ in versions]
-    selected_label = st.sidebar.selectbox("Selecione a versão", version_labels, index=0)
-    selected_path = next(path for label, path in versions if label == selected_label)
 
-    settings = _load_settings_with_fallback(str(selected_path))
+    st.sidebar.header("Versao do processamento")
+    display_options: List[str] = []
+    option_map: Dict[str, PipelineVersion] = {}
+    for version in versions:
+        try:
+            rel_path = version.config_path.relative_to(_REPO_ROOT)
+        except ValueError:
+            rel_path = version.config_path
+        display = f"{version.label} — {rel_path}"
+        display_options.append(display)
+        option_map[display] = version
+
+    selected_display = st.sidebar.selectbox("Selecione a versao", display_options, index=0)
+    selected_version = option_map[selected_display]
+
+    settings = _load_settings_with_fallback(str(selected_version.config_path))
     processor = Processor(settings)
 
-    st.set_page_config(page_title="Conciliação de NF-e", layout="wide")
-    st.title("Automação de Importação de NF-e")
+    st.set_page_config(page_title="Conciliacao de NF-e", layout="wide")
+    st.title("Automacao de Importacao de NF-e")
 
-    st.sidebar.header("Nova execução")
+    st.sidebar.header("Nova execucao")
+    st.sidebar.caption(f"Config: {selected_version.config_path}")
     uploaded_files = st.sidebar.file_uploader("Carregar NF-e (XML)", type="xml", accept_multiple_files=True)
-    st.sidebar.caption(f"Config: {selected_path}")
-    current_user = st.sidebar.text_input("UsuÃ¡rio", value=st.session_state.get("current_user", ""))
+    current_user = st.sidebar.text_input("Usuario", value=st.session_state.get("current_user", ""))
     st.session_state["current_user"] = current_user
 
     if uploaded_files:
@@ -225,12 +253,11 @@ def main() -> None:
 
     if st.sidebar.button("Processar agora"):
         with st.spinner("Processando arquivos..."):
-            result = processor.process_directory(mode=f"ui:{selected_label}", user=current_user)
+            result = processor.process_directory(mode=f"ui:{selected_version.key}", user=current_user)
         if result is None:
             st.warning("Nenhum arquivo encontrado para processamento.")
         else:
-            st.success("Processamento concluído.")
-
+            st.success("Processamento concluido.")
             try:
                 from pathlib import Path as _P
                 _csv = _P(str(result.dataframe_path))
@@ -242,26 +269,12 @@ def main() -> None:
                 if result.pendings_path:
                     _pend = _P(str(result.pendings_path))
                     if _pend.exists():
-                        st.download_button("Baixar Pendências", data=_pend.read_bytes(), file_name=_pend.name, mime="text/csv")
+                        st.download_button("Baixar Pendencias", data=_pend.read_bytes(), file_name=_pend.name, mime="text/csv")
             except Exception:
                 pass
+
     run = render_summary(processor)
     if run:
         show_pending_items(processor, run)
 
     show_catalog_search(processor)
-
-
-if __name__ == "__main__":  # pragma: no cover
-    main()
-
-
-
-
-
-
-
-
-
-
-

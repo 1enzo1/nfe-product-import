@@ -1,0 +1,95 @@
+﻿paths:
+  nfe_input_folder: "data/"
+  master_data_file: "example_docs/MART-Ficha-tecnica-Biblioteca-Virtual-08-08-2025.xlsx"
+  output_folder: "output/v2/"
+  log_folder: "logs/v2/"
+  synonym_cache_file: "data/synonyms.json"
+
+pricing:
+  strategy: "markup_fixo"
+  markup_factor: 2.2
+
+csv_output:
+  filename_prefix: "importacao_produtos_v2_"
+  columns:
+    - "Handle"
+    - "Title"
+    - "Body (HTML)"
+    - "Vendor"
+    - "Tags"
+    - "Published"
+    - "Option1 Name"
+    - "Option1 Value"
+    - "Option2 Name"
+    - "Option2 Value"
+    - "Option3 Name"
+    - "Option3 Value"
+    - "Variant SKU"
+    - "Variant Price"
+    - "Variant Compare At Price"
+    - "Variant Inventory Qty"
+    - "Variant Weight"
+    - "Variant Weight Unit"
+    - "Variant Requires Shipping"
+    - "Image Src"
+    - "Variant Barcode"
+    - "Variant Grams"
+    - "Variant Inventory Tracker"
+    - "Variant Inventory Policy"
+    - "Variant Fulfillment Service"
+    - "product.metafields.custom.unidade"
+    - "product.metafields.custom.catalogo"
+    - "product.metafields.custom.dimensoes_do_produto"
+    - "product.metafields.custom.composicao"
+    - "product.metafields.custom.capacidade"
+    - "product.metafields.custom.modo_de_uso"
+    - "product.metafields.custom.icms"
+    - "product.metafields.custom.ncm"
+    - "product.metafields.custom.pis"
+    - "product.metafields.custom.ipi"
+    - "product.metafields.custom.cofins"
+    - "product.metafields.custom.componente_de_kit"
+    - "product.metafields.custom.resistencia_a_agua"
+    - "Variant Taxable"
+    - "Cost per item"
+    - "Image Position"
+    - "Variant Image"
+    - "Product Category"
+    - "Type"
+    - "Collection"
+    - "Status"
+
+metafields:
+  namespace: "custom"
+  keys:
+    unidade: "unidade"
+    catalogo: "catalogo"
+    dimensoes_do_produto: "dimensoes_do_produto"
+    composicao: "composicao"
+    capacidade: "capacidade"
+    modo_de_uso: "modo_de_uso"
+    icms: "icms"
+    ncm: "ncm"
+    pis: "pis"
+    ipi: "ipi"
+    cofins: "cofins"
+    componente_de_kit: "componente_de_kit"
+    resistencia_a_agua: "resistencia_a_agua"
+  dynamic_mapping:
+    enabled: false
+    map: {}
+
+variants:
+  enabled: false
+  option1:
+    name: "Title"
+    column: null
+  option2:
+    name: "Title"
+    column: null
+
+weights:
+  dynamic_unit: true
+  column: "peso"
+  unit_column: "un_peso"
+  default_unit: "kg"

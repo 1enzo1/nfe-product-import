@@ -1,0 +1,5 @@
+version,csv_path,headers_ok,variants_unique,policies_ok,weight_ok,rows
+v1,C:\nfe-product-import\output\v1\importacao_produtos_v1_20250926T180540.csv,True,True,True,True,128
+v2,C:\nfe-product-import\output\v2\importacao_produtos_v2_20250926T180608.csv,True,True,True,True,128
+enhanced,C:\nfe-product-import\output\enhanced\importacao_produtos_enhanced_20250926T180636.csv,True,True,True,True,128
+super,C:\nfe-product-import\output\super\importacao_produtos_super_20250926T180702.csv,True,True,True,True,128
