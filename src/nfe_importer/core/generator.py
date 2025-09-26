@@ -117,12 +117,26 @@ class CSVGenerator:
 
             # Shipping and weight
             weight = row.get("Weight")
-            if isinstance(weight, (int, float)) and float(weight) > 0:
-                row["Variant Weight"] = weight
-                row.setdefault("Variant Weight Unit", "kg")
+            # Dynamic weight unit selection when enabled
+            if getattr(self.settings, "weights", None) and self.settings.weights.dynamic_unit:
+                # Try to read from product extra columns if present in base row kept fields
+                unit = (row.get("_weight_unit_raw") or self.settings.weights.default_unit).lower()
+                unit = "g" if unit.startswith("g") else ("kg" if unit.startswith("k") else unit)
+                # Value already in row["Weight"] may come from catalogue mapping
+                if not isinstance(weight, (int, float)):
+                    # attempt to read numeric value from extra column name
+                    pass  # keep empty if not available
+                row.setdefault("Variant Weight Unit", unit)
                 row.setdefault("Variant Requires Shipping", "TRUE")
+                if isinstance(weight, (int, float)) and float(weight) > 0:
+                    row["Variant Weight"] = weight
             else:
-                row.setdefault("Variant Requires Shipping", "TRUE")
+                if isinstance(weight, (int, float)) and float(weight) > 0:
+                    row["Variant Weight"] = weight
+                    row.setdefault("Variant Weight Unit", "kg")
+                    row.setdefault("Variant Requires Shipping", "TRUE")
+                else:
+                    row.setdefault("Variant Requires Shipping", "TRUE")
 
             # Taxable by default (unless explicitly set elsewhere)
             row.setdefault("Variant Taxable", "TRUE")
@@ -204,6 +218,13 @@ class CSVGenerator:
             row["composition"] = product.metafields.get("composition", "")
         if product.extra:
             row["_features"] = product.extra.get("features", "")
+            # keep raw unit column if present for dynamic unit selection
+            try:
+                unit_col = self.settings.weights.unit_column if getattr(self.settings, "weights", None) else None
+            except Exception:
+                unit_col = None
+            if unit_col and unit_col in product.extra:
+                row["_weight_unit_raw"] = str(product.extra.get(unit_col)).strip()
         return row
 
     @staticmethod

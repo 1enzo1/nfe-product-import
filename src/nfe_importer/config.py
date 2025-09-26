@@ -87,6 +87,15 @@ class MetafieldsConfig(BaseModel):
     namespace: str = Field("custom", description="Shopify metafield namespace")
     keys: Dict[str, str] = Field(default_factory=dict, description="Mapping of logical names to metafield keys")
 
+class WeightsConfig(BaseModel):
+    dynamic_unit: bool = Field(False, description="If true, choose Variant Weight Unit dynamically per item")
+    column: str = Field("peso", description="Catalogue column name (sanitised) with numeric weight value")
+    unit_column: Optional[str] = Field(
+        default=None,
+        description="Optional catalogue column with the unit string (e.g., 'kg' or 'g')",
+    )
+    default_unit: str = Field("kg", description="Default unit to use when unit column is absent")
+
 
 class GoogleDriveConfig(BaseModel):
     """Optional Google Drive integration configuration."""
@@ -139,6 +148,7 @@ class Settings(BaseModel):
     pricing: PricingConfig = Field(default_factory=PricingConfig)
     csv_output: CSVOutputConfig
     metafields: MetafieldsConfig = Field(default_factory=MetafieldsConfig)
+    weights: WeightsConfig = Field(default_factory=WeightsConfig)
     google_drive: Optional[GoogleDriveConfig] = None
     watch: Optional[WatchConfig] = None
     default_vendor: Optional[str] = Field(
