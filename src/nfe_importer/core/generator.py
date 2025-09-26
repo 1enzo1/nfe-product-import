@@ -68,6 +68,11 @@ class CSVGenerator:
             row.setdefault("_ncm", set())
             row.setdefault("_cest", set())
             row.setdefault("_units", set())
+            # capture item-level notes/description to enrich Body (HTML)
+            if not row.get("_infAdProd") and isinstance(item.additional_data, dict):
+                info = item.additional_data.get("infAdProd")
+                if info:
+                    row["_infAdProd"] = str(info)
 
             row["_total_qty"] += item.quantity
             row["_total_cost"] += item.quantity * item.unit_value
@@ -85,9 +90,11 @@ class CSVGenerator:
             total_cost = row.pop("_total_cost", 0.0)
             cost_per_item = total_cost / quantity if quantity else 0.0
 
-            row["Inventory Qty"] = round(quantity, 4)
+            # Inventory and pricing
+            # - Inventory Qty as integer when possible (Shopify prefers integer here)
+            inv_qty_int = int(round(quantity)) if abs(quantity - round(quantity)) < 1e-9 else quantity
+            row["Inventory Qty"] = inv_qty_int
             row["Cost per item"] = round_money(cost_per_item)
-
             row["Price"] = self._compute_price(row, cost_per_item)
 
             cfops = row.pop("_cfops", set())
@@ -96,6 +103,50 @@ class CSVGenerator:
             units = row.pop("_units", set())
 
             self._fill_metafields(row, cfops=cfops, ncms=ncms, cests=cests, units=units)
+
+            # Shopify Variant template defaults and mapping
+            # Option handling: single-variant default
+            row.setdefault("Option1 Name", "Title")
+            row.setdefault("Option1 Value", "Default Title")
+
+            # Inventory tracker/policy/fulfillment
+            if isinstance(inv_qty_int, (int, float)) and float(inv_qty_int) > 0:
+                row["Variant Inventory Tracker"] = "shopify"
+            row.setdefault("Variant Inventory Policy", "deny")
+            row.setdefault("Variant Fulfillment Service", "manual")
+
+            # Shipping and weight
+            weight = row.get("Weight")
+            if isinstance(weight, (int, float)) and float(weight) > 0:
+                row["Variant Weight"] = weight
+                row.setdefault("Variant Weight Unit", "kg")
+                row.setdefault("Variant Requires Shipping", "TRUE")
+            else:
+                row.setdefault("Variant Requires Shipping", "TRUE")
+
+            # Taxable by default (unless explicitly set elsewhere)
+            row.setdefault("Variant Taxable", "TRUE")
+
+            # Tags: include category (product_type) plus existing tags
+            product_type = row.get("Product Type") or ""
+            tags = []
+            if isinstance(row.get("Tags"), str) and row["Tags"].strip():
+                tags = [t.strip() for t in str(row["Tags"]).split(",") if t.strip()]
+            if product_type and product_type not in tags:
+                tags.insert(0, product_type)
+            row["Tags"] = ",".join(tags)
+
+            # Body (HTML): prefer catalogue features or composition if present
+            if not row.get("Body (HTML)"):
+                features = row.get("_features") or ""
+                composition = row.get("composition") or ""
+                inf_ad = row.get("_infAdProd") or ""
+                parts = [p for p in [features, composition, inf_ad] if p]
+                if parts:
+                    row["Body (HTML)"] = "\n\n".join(parts)
+            # cleanup helper-only fields
+            row.pop("_features", None)
+            row.pop("_infAdProd", None)
 
         dataframe = pd.DataFrame(rows.values())
 
@@ -106,9 +157,8 @@ class CSVGenerator:
             "Price": "Variant Price",
             "Compare At Price": "Variant Compare At Price",
             "Inventory Qty": "Variant Inventory Qty",
-            "Weight": "Variant Weight",
             "Barcode": "Variant Barcode",
-            "Product Type": "Type",
+            # Keep 'Type' empty by default as per Shopify template used
         }
         for src, dst in column_map.items():
             if src in dataframe.columns:
@@ -139,13 +189,21 @@ class CSVGenerator:
             "Barcode": self._valid_barcode(product.barcode),
             "Status": "active",
             "Published": "TRUE",
+            # Tags are finalised after aggregation to include category
             "Tags": ",".join(product.tags) if product.tags else "",
             "Compare At Price": "",
             "Weight": product.weight or "",
             "Image Src": self.image_resolver(product) or "",
+            # Shopify Variant defaults (filled/confirmed later)
+            "Variant Inventory Policy": "deny",
+            "Variant Fulfillment Service": "manual",
+            "Variant Requires Shipping": "TRUE",
+            "Variant Taxable": "TRUE",
         }
         if product.metafields:
             row["composition"] = product.metafields.get("composition", "")
+        if product.extra:
+            row["_features"] = product.extra.get("features", "")
         return row
 
     @staticmethod
