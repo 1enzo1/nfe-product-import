@@ -204,6 +204,19 @@ class CSVGenerator:
             row["composition"] = product.metafields.get("composition", "")
         if product.extra:
             row["_features"] = product.extra.get("features", "")
+            # Dynamic metafields mapping from catalogue extra columns
+            dm = getattr(self.settings.metafields, "dynamic_mapping", None)
+            if dm and dm.enabled and isinstance(dm.map, dict):
+                ns = self.settings.metafields.namespace
+                for meta_key, col in dm.map.items():
+                    if not col:
+                        continue
+                    val = product.extra.get(col) or product.extra.get(str(col).lower())
+                    if val is None:
+                        continue
+                    text = str(val).strip()
+                    if text and text.lower() != "nan":
+                        row[f"product.metafields.{ns}.{meta_key}"] = text
         return row
 
     @staticmethod

@@ -86,6 +86,11 @@ class CSVOutputConfig(BaseModel):
 class MetafieldsConfig(BaseModel):
     namespace: str = Field("custom", description="Shopify metafield namespace")
     keys: Dict[str, str] = Field(default_factory=dict, description="Mapping of logical names to metafield keys")
+    class DynamicMap(BaseModel):
+        enabled: bool = Field(False, description="Enable dynamic mapping from catalogue columns to metafield keys")
+        map: Dict[str, str] = Field(default_factory=dict, description="CSV metafield key -> catalogue column")
+
+    dynamic_mapping: DynamicMap = Field(default_factory=DynamicMap)
 
 
 class GoogleDriveConfig(BaseModel):
