@@ -8,7 +8,9 @@ Notes for Streamlit Cloud deployment:
 
 from __future__ import annotations
 
-import argparse\r\nfrom dataclasses import dataclass\r\nfrom pathlib import Path
+import argparse
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, TYPE_CHECKING
 
 import pandas as pd
