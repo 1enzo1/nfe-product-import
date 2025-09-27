@@ -22,6 +22,7 @@ class CSVGenerator:
     def __init__(self, settings: Settings, image_resolver: Optional[ImageResolver] = None) -> None:
         self.settings = settings
         self.image_resolver = image_resolver or (lambda product: None)
+        self.default_status = "active"
 
     def generate(
         self,
@@ -208,7 +209,7 @@ class CSVGenerator:
             "Product Type": product.product_type or "",
             "SKU": product.sku,
             "Barcode": self._valid_barcode(product.barcode),
-            "Status": "active",
+            "Status": self.default_status,
             "Published": "TRUE",
             # Tags are finalised after aggregation to include category
             "Tags": ",".join(product.tags) if product.tags else "",
