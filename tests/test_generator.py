@@ -9,7 +9,7 @@ from nfe_importer.config import (
     PricingConfig,
     Settings,
 )
-from nfe_importer.core.generator import CSVGenerator
+from nfe_importer.core.generator import CSVGenerator, SHOPIFY_HEADER
 from nfe_importer.core.models import CatalogProduct, MatchDecision, NFEItem
 
 
@@ -23,35 +23,13 @@ def build_settings(tmp_path: Path) -> Settings:
     )
     csv_config = CSVOutputConfig(
         filename_prefix="test_",
-        columns=[
-            "Handle",
-            "Title",
-            "Body (HTML)",
-            "Vendor",
-            "Product Type",
-            "SKU",
-            "Barcode",
-            "Status",
-            "Published",
-            "Tags",
-            "Price",
-            "Compare At Price",
-            "Cost per item",
-            "Inventory Qty",
-            "Variant Weight",
-            "Variant Weight Unit",
-            "Variant Grams",
-            "Collection",
-            "Image Src",
-        ],
+        columns=list(SHOPIFY_HEADER),
     )
     metafields = MetafieldsConfig(
         namespace="custom",
         keys={
             "ncm": "ncm",
-            "cfop": "cfop",
             "unidade": "unidade",
-            "cest": "cest",
             "composicao": "composicao",
             "catalogo": "catalogo",
             "modo_de_uso": "modo_de_uso",
@@ -121,8 +99,9 @@ def test_csv_generator_creates_file(tmp_path):
     assert csv_path.exists()
     assert pendings_path is None
     row = dataframe.iloc[0]
-    assert row["SKU"] == "08158"
-    assert row["Price"] == 20.0  # markup_fixo 2.0 * cost 10.0
+    assert row["Variant SKU"] == "08158"
+    assert float(row["Variant Price"]) == 20.0  # markup_fixo 2.0 * cost 10.0
+    assert row["Variant Inventory Tracker"] == "shopify"
     assert row["Variant Weight"] == "400"
     assert row["Variant Weight Unit"] == "g"
     assert row["Variant Grams"] == "400"
@@ -210,7 +189,7 @@ def test_weight_and_metafields_mapping(tmp_path):
         ]
     )
 
-    row_light = df[df["SKU"] == "SKU-L"].iloc[0]
+    row_light = df[df["Variant SKU"] == "SKU-L"].iloc[0]
     assert row_light["Variant Weight"] == "300"
     assert row_light["Variant Weight Unit"] == "g"
     assert row_light["Variant Grams"] == "300"
@@ -223,7 +202,7 @@ def test_weight_and_metafields_mapping(tmp_path):
     assert row_light["product.metafields.custom.unidade"] == "CX"
     assert row_light["product.metafields.custom.ncm"] == "1111"
 
-    row_heavy = df[df["SKU"] == "SKU-H"].iloc[0]
+    row_heavy = df[df["Variant SKU"] == "SKU-H"].iloc[0]
     assert row_heavy["Variant Weight"] == "1.25"
     assert row_heavy["Variant Weight Unit"] == "kg"
     assert row_heavy["Variant Grams"] == "1250"
@@ -275,6 +254,7 @@ def test_body_html_excludes_composition_when_metafield_present(tmp_path):
     assert row["Body (HTML)"] == "Descricao concisa"
     assert row["product.metafields.custom.modo_de_uso"] == "Toque macio"
     assert "Algodao" not in row["Body (HTML)"]
+
 
 
 

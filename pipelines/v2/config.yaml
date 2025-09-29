@@ -1,4 +1,4 @@
-﻿paths:
+paths:
   nfe_input_folder: "data/"
   master_data_file: "example_docs/MART-Ficha-tecnica-Biblioteca-Virtual-08-08-2025.xlsx"
   output_folder: "output/v2/"
@@ -93,3 +93,4 @@ weights:
   column: "peso"
   unit_column: "un_peso"
   default_unit: "kg"
+

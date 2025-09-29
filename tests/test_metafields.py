@@ -1,48 +1,43 @@
 from pathlib import Path
 
-from nfe_importer.core.generator import CSVGenerator
+from nfe_importer.config import CSVOutputConfig, MetafieldsConfig, PathsConfig, Settings
+from nfe_importer.core.generator import CSVGenerator, SHOPIFY_HEADER
 from nfe_importer.core.models import CatalogProduct, MatchDecision, NFEItem
-from nfe_importer.config import Settings
 
 
 def make_settings(tmp_path: Path, enabled: bool = True) -> Settings:
-    cfg = {
-        "paths": {
-            "nfe_input_folder": str(tmp_path),
-            "master_data_file": str(tmp_path / "master.xlsx"),
-            "output_folder": str(tmp_path),
-            "log_folder": str(tmp_path),
-            "synonym_cache_file": str(tmp_path / "synonyms.json"),
+    paths = PathsConfig(
+        nfe_input_folder=tmp_path,
+        master_data_file=tmp_path / "master.xlsx",
+        output_folder=tmp_path,
+        log_folder=tmp_path,
+        synonym_cache_file=tmp_path / "synonyms.json",
+    )
+    csv_output = CSVOutputConfig(
+        filename_prefix="importacao_produtos_",
+        columns=list(SHOPIFY_HEADER),
+    )
+    metafields = MetafieldsConfig(
+        namespace="custom",
+        keys={
+            "unidade": "unidade",
+            "catalogo": "catalogo",
+            "dimensoes_do_produto": "dimensoes_do_produto",
+            "capacidade": "capacidade",
         },
-        "csv_output": {
-            "filename_prefix": "importacao_produtos_",
-            "columns": [
-                "Handle", "Title", "Body (HTML)", "Vendor", "Tags", "Published",
-                "Variant SKU", "Variant Weight", "Variant Weight Unit", "Variant Grams",
-                "product.metafields.custom.unidade", "product.metafields.custom.catalogo",
-                "product.metafields.custom.dimensoes_do_produto", "product.metafields.custom.capacidade",
-            ],
-        },
-        "metafields": {
-            "namespace": "custom",
-            "keys": {
-                "unidade": "unidade",
+        dynamic_mapping=MetafieldsConfig.DynamicMap(
+            enabled=enabled,
+            map={
+                "unidade": "unit",
                 "catalogo": "catalogo",
-                "dimensoes_do_produto": "dimensoes_do_produto",
-                "capacidade": "capacidade",
+                "dimensoes_do_produto": "medidas_s_emb",
+                "capacidade": "capacidade__ml_ou_peso_suportado",
             },
-            "dynamic_mapping": {
-                "enabled": enabled,
-                "map": {
-                    "unidade": "unit",
-                    "catalogo": "catalogo",
-                    "dimensoes_do_produto": "medidas_s_emb",
-                    "capacidade": "capacidade__ml_ou_peso_suportado",
-                },
-            },
-        },
-    }
-    return Settings.parse_obj(cfg)
+        ),
+    )
+    settings = Settings(paths=paths, csv_output=csv_output, metafields=metafields)
+    settings.ensure_folders()
+    return settings
 
 
 def make_decision(extra: dict) -> MatchDecision:

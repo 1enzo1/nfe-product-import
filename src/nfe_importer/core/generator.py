@@ -16,12 +16,68 @@ from .utils import clean_multiline_text, gtin_is_valid, normalize_barcode, round
 
 LOGGER = logging.getLogger(__name__)
 
+SHOPIFY_HEADER = [
+    "Handle",
+    "Title",
+    "Body (HTML)",
+    "Vendor",
+    "Tags",
+    "Published",
+    "Option1 Name",
+    "Option1 Value",
+    "Option2 Name",
+    "Option2 Value",
+    "Option3 Name",
+    "Option3 Value",
+    "Variant SKU",
+    "Variant Price",
+    "Variant Compare At Price",
+    "Variant Inventory Qty",
+    "Variant Weight",
+    "Variant Weight Unit",
+    "Variant Requires Shipping",
+    "Image Src",
+    "Variant Barcode",
+    "Variant Grams",
+    "Variant Inventory Tracker",
+    "Variant Inventory Policy",
+    "Variant Fulfillment Service",
+    "product.metafields.custom.unidade",
+    "product.metafields.custom.catalogo",
+    "product.metafields.custom.dimensoes_do_produto",
+    "product.metafields.custom.composicao",
+    "product.metafields.custom.capacidade",
+    "product.metafields.custom.modo_de_uso",
+    "product.metafields.custom.icms",
+    "product.metafields.custom.ncm",
+    "product.metafields.custom.pis",
+    "product.metafields.custom.ipi",
+    "product.metafields.custom.cofins",
+    "product.metafields.custom.componente_de_kit",
+    "product.metafields.custom.resistencia_a_agua",
+    "Variant Taxable",
+    "Cost per item",
+    "Image Position",
+    "Variant Image",
+    "Product Category",
+    "Type",
+    "Collection",
+    "Status",
+]
+
 ImageResolver = Callable[[CatalogProduct], Optional[str]]
 
 
 class CSVGenerator:
+    def _validate_header(self) -> None:
+        configured = list(self.settings.csv_output.columns)
+        if configured != SHOPIFY_HEADER:
+            raise ValueError("Configured csv_output.columns does not match the Shopify template header")
+
+
     def __init__(self, settings: Settings, image_resolver: Optional[ImageResolver] = None) -> None:
         self.settings = settings
+        self._validate_header()
         self.image_resolver = image_resolver or (lambda product: None)
         self.default_status = "active"
 
@@ -112,8 +168,7 @@ class CSVGenerator:
             row.setdefault("Option1 Value", "Default Title")
 
             # Inventory tracker/policy/fulfillment
-            if isinstance(inv_qty_int, (int, float)) and float(inv_qty_int) > 0:
-                row["Variant Inventory Tracker"] = "shopify"
+            row["Variant Inventory Tracker"] = "shopify"
             row.setdefault("Variant Inventory Policy", "deny")
             row.setdefault("Variant Fulfillment Service", "manual")
 
@@ -140,14 +195,9 @@ class CSVGenerator:
             # Taxable by default (unless explicitly set elsewhere)
             row.setdefault("Variant Taxable", "TRUE")
 
-            # Tags: include category (product_type) plus existing tags
+            # Tags: include category (product_type) plus existing tags without códigos internos
             product_type = row.get("Product Type") or ""
-            tags = []
-            if isinstance(row.get("Tags"), str) and row["Tags"].strip():
-                tags = [t.strip() for t in str(row["Tags"]).split(",") if t.strip()]
-            if product_type and product_type not in tags:
-                tags.insert(0, product_type)
-            row["Tags"] = ",".join(tags)
+            row["Tags"] = self._build_tags(row.get("Tags"), product_type)
 
             # Body (HTML): prefer catalogue description (textos) when available
             if not row.get("Body (HTML)"):
@@ -222,18 +272,35 @@ class CSVGenerator:
             collection_value = collection_value.strip()
             if collection_value.lower() == "nan":
                 collection_value = ""
+        product_category = None
+        if product.extra:
+            product_category = product.extra.get("product_category")
+        if isinstance(product_category, str):
+            product_category = product_category.strip()
+            if product_category.lower() == "nan":
+                product_category = None
+        if not product_category:
+            product_category = product.product_type or ""
+        product_type_value = product.product_type or ""
+        type_value = ""
+        if product.extra:
+            raw_type = product.extra.get("subcateg")
+            if isinstance(raw_type, str) and raw_type.strip().lower() != "nan":
+                type_value = raw_type.strip()
         row: Dict[str, object] = {
             "Handle": slugify(product.title or product.sku),
             "Title": self._refine_title(product.title),
             "Vendor": product.vendor or self.settings.default_vendor or "",
-            "Product Type": product.product_type or "",
+            "Product Type": product_type_value,
             "SKU": product.sku,
             "Barcode": self._valid_barcode(product.barcode),
             "Status": self.default_status,
             "Published": "TRUE",
             # Tags are finalised after aggregation to include category
             "Tags": ",".join(product.tags) if product.tags else "",
-            "Collection": (collection_value or product.product_type or ""),
+            "Collection": (collection_value or product_type_value or ""),
+            "Product Category": product_category,
+            "Type": type_value,
             "Compare At Price": "",
             "Weight": product.weight or "",
             "Image Src": self.image_resolver(product) or "",
@@ -410,6 +477,40 @@ class CSVGenerator:
         namespace = self.settings.metafields.namespace
         return [f"product.metafields.{namespace}.{key}" for key in self.settings.metafields.keys.values()]
 
+    def _build_tags(self, raw_tags: object, product_type: str) -> str:
+        tags: List[str] = []
+        seen = set()
+        if isinstance(raw_tags, str):
+            for candidate in raw_tags.split(','):
+                tag = candidate.strip()
+                if not tag:
+                    continue
+                normalized = tag.casefold()
+                if normalized in {"nan", "none", "null"}:
+                    continue
+                if self._tag_looks_like_internal_code(tag):
+                    continue
+                if normalized not in seen:
+                    tags.append(tag)
+                    seen.add(normalized)
+        if product_type:
+            pt = product_type.strip()
+            if pt:
+                normalized_pt = pt.casefold()
+                if normalized_pt not in seen:
+                    tags.insert(0, pt)
+                    seen.add(normalized_pt)
+        return ','.join(tags)
+
+    @staticmethod
+    def _tag_looks_like_internal_code(tag: str) -> bool:
+        candidate = tag.strip()
+        if not candidate:
+            return True
+        if re.fullmatch(r'\dT\d{2}', candidate, flags=re.IGNORECASE):
+            return True
+        return False
+
     def _build_pendings(self, unmatched: Iterable[UnmatchedItem]) -> pd.DataFrame:
         records = []
         for pending in unmatched:
@@ -469,7 +570,7 @@ class CSVGenerator:
         return ""
 
 
-__all__ = ["CSVGenerator"]
+__all__ = ["CSVGenerator", "SHOPIFY_HEADER"]
 
 
 
