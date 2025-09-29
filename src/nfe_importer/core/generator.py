@@ -65,6 +65,18 @@ SHOPIFY_HEADER = [
     "Status",
 ]
 
+
+REQUIRED_FIELDS = [
+    "Handle",
+    "Title",
+    "Vendor",
+    "Variant SKU",
+    "Variant Price",
+    "Variant Inventory Qty",
+    "Variant Weight",
+    "Variant Weight Unit",
+]
+
 ImageResolver = Callable[[CatalogProduct], Optional[str]]
 
 
@@ -74,6 +86,34 @@ class CSVGenerator:
         if configured != SHOPIFY_HEADER:
             raise ValueError("Configured csv_output.columns does not match the Shopify template header")
 
+
+    def _validate_required_fields(self, dataframe: pd.DataFrame) -> None:
+        if "Handle" not in dataframe.columns:
+            raise ValueError("Generated CSV missing 'Handle' column")
+        handles = dataframe["Handle"].astype(str).str.strip()
+        missing: Dict[str, List[str]] = {}
+
+        def record(field: str, mask) -> None:
+            if mask.any():
+                missing[field] = sorted(set(handles[mask]))
+
+        for field in REQUIRED_FIELDS:
+            if field not in dataframe.columns:
+                missing[field] = sorted(set(handles))
+                continue
+            series = dataframe[field]
+            if field == "Variant Weight":
+                numeric = pd.to_numeric(series, errors="coerce")
+                mask = numeric.isna() | (numeric <= 0)
+            elif field == "Variant Weight Unit":
+                mask = ~series.astype(str).str.strip().str.lower().isin({"g", "kg"})
+            else:
+                mask = series.astype(str).str.strip().str.lower().isin({"", "nan", "none", "null"})
+            record(field, mask)
+
+        if missing:
+            details = '; '.join(f"{field}: {', '.join(values)}" for field, values in missing.items())
+            raise ValueError(f"Missing required fields in generated CSV -> {details}")
 
     def __init__(self, settings: Settings, image_resolver: Optional[ImageResolver] = None) -> None:
         self.settings = settings
@@ -88,6 +128,7 @@ class CSVGenerator:
         run_id: str,
     ) -> Tuple[Path, Optional[Path], pd.DataFrame, pd.DataFrame]:
         dataframe = self._build_dataframe(matched)
+        self._validate_required_fields(dataframe)
         csv_path = self._write_dataframe(dataframe, run_id)
         pendings_df = self._build_pendings(unmatched)
         pendings_path = self._write_pendings(pendings_df, run_id)
