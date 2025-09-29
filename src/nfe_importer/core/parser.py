@@ -199,6 +199,8 @@ class CatalogLoader:
             vendor = str(data.get("vendor") or "").strip() or None
             product_type = str(data.get("product_type") or "").strip() or None
             collection = str(data.get("collection") or "").strip() or None
+            if isinstance(collection, str) and collection.lower() == "nan":
+                collection = None
             unit = str(data.get("unit") or "").strip() or None
             ncm = str(data.get("ncm") or "").strip() or None
             cest = str(data.get("cest") or "").strip() or None
@@ -278,6 +280,7 @@ class CatalogLoader:
 
 
 __all__ = ["NFEParser", "CatalogLoader"]
+
 
 
 

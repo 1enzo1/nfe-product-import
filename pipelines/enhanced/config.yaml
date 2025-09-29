@@ -83,7 +83,7 @@ metafields:
       dimensoes_do_produto: "medidas_s_emb"
       capacidade: "capacidade__ml_ou_peso_suportado"
       ncm: "ncm"
-      modo_de_uso: "textos"
+      modo_de_uso: "features"
 
 variants:
   enabled: true

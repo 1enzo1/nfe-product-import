@@ -66,7 +66,7 @@ def build_settings(tmp_path: Path) -> Settings:
                 "dimensoes_do_produto": "medidas_s_emb",
                 "capacidade": "capacidade__ml_ou_peso_suportado",
                 "ncm": "ncm",
-                "modo_de_uso": "textos",
+                "modo_de_uso": "features",
             },
         ),
     )
@@ -92,7 +92,7 @@ def make_decision() -> MatchDecision:
         cest="",
         weight=0.4,
         metafields={"composition": "70% METAL"},
-        extra={"features": "Detalhes decorativos"},
+        extra={"features": "Detalhes decorativos", "textos": "Descricao detalhada do produto"},
     )
     item = NFEItem(
         invoice_key="TEST",
@@ -127,8 +127,9 @@ def test_csv_generator_creates_file(tmp_path):
     assert row["Variant Weight Unit"] == "g"
     assert row["Variant Grams"] == "400"
     # Body should keep features but avoid duplicating composition metafield
-    assert "Detalhes decorativos" in row["Body (HTML)"]
+    assert row["Body (HTML)"] == "Descricao detalhada do produto"
     assert "70% METAL" not in row["Body (HTML)"]
+    assert row["product.metafields.custom.modo_de_uso"] == "Detalhes decorativos"
 
     output_df = pd.read_csv(csv_path)
     assert output_df.loc[0, "Handle"] != ""
@@ -147,7 +148,7 @@ def test_weight_and_metafields_mapping(tmp_path):
         unit="CX",
         ncm="1111",
         weight=0.3,
-        collection=None,
+        collection="nan",
         metafields={"composition": "Fibra natural"},
         extra={
             "features": "Caracteristica leve",
@@ -214,7 +215,8 @@ def test_weight_and_metafields_mapping(tmp_path):
     assert row_light["Variant Weight Unit"] == "g"
     assert row_light["Variant Grams"] == "300"
     assert row_light["Collection"] == "Categoria A"
-    assert row_light["Body (HTML)"] == "Caracteristica leve"
+    assert row_light["Body (HTML)"] == "Uso diario"
+    assert row_light["product.metafields.custom.modo_de_uso"] == "Caracteristica leve"
     assert row_light["product.metafields.custom.catalogo"] == "Linha 1"
     assert row_light["product.metafields.custom.capacidade"] == "500 ml"
     assert row_light["product.metafields.custom.dimensoes_do_produto"] == "10x10x5"
@@ -230,7 +232,8 @@ def test_weight_and_metafields_mapping(tmp_path):
     assert row_heavy["product.metafields.custom.unidade"] == "UN"
     assert row_heavy["product.metafields.custom.ncm"] == "2222"
     # When no features provided the body may remain empty
-    assert row_heavy["Body (HTML)"] == ""
+    assert row_heavy["Body (HTML)"] == "Limpar com pano seco"
+    assert row_heavy["product.metafields.custom.modo_de_uso"] == ""
 
 
 def test_body_html_excludes_composition_when_metafield_present(tmp_path):
@@ -246,7 +249,7 @@ def test_body_html_excludes_composition_when_metafield_present(tmp_path):
         weight=0.8,
         ncm="3333",
         metafields={"composition": "100% Algodao"},
-        extra={"features": "Toque macio"},
+        extra={"features": "Toque macio", "textos": "Descricao concisa"},
     )
     item = NFEItem(
         invoice_key="R3",
@@ -269,8 +272,17 @@ def test_body_html_excludes_composition_when_metafield_present(tmp_path):
 
     row = df.iloc[0]
     assert row["product.metafields.custom.composicao"] == "100% Algodao"
-    assert row["Body (HTML)"] == "Toque macio"
+    assert row["Body (HTML)"] == "Descricao concisa"
+    assert row["product.metafields.custom.modo_de_uso"] == "Toque macio"
     assert "Algodao" not in row["Body (HTML)"]
+
+
+
+
+
+
+
+
 
 
 

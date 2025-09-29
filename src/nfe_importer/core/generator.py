@@ -149,9 +149,11 @@ class CSVGenerator:
                 tags.insert(0, product_type)
             row["Tags"] = ",".join(tags)
 
-            # Body (HTML): prefer catalogue features or composition if present
+            # Body (HTML): prefer catalogue description (textos) when available
             if not row.get("Body (HTML)"):
-                features = self._clean_text(row.get("_features") or "")
+                description = self._clean_text(row.get("_description") or "")
+                if not description:
+                    description = self._clean_text(row.get("_features") or "")
                 composition_raw = self._clean_text(row.get("composition") or row.get("composicao") or "")
                 inf_ad = self._clean_text(row.get("_infAdProd") or "")
                 composition_meta_value = ""
@@ -160,11 +162,12 @@ class CSVGenerator:
                     meta_column = f"product.metafields.{self.settings.metafields.namespace}.{composition_key}"
                     composition_meta_value = self._clean_text(row.get(meta_column) or "")
                 composition_body = composition_raw if (composition_raw and not composition_meta_value) else ""
-                parts = [p for p in [features, composition_body, inf_ad] if p]
+                parts = [p for p in [description, composition_body, inf_ad] if p]
                 if parts:
                     row["Body (HTML)"] = "\n\n".join(parts)
             # cleanup helper-only fields
             row.pop("_features", None)
+            row.pop("_description", None)
             row.pop("_infAdProd", None)
 
         dataframe = pd.DataFrame(rows.values())
@@ -214,6 +217,11 @@ class CSVGenerator:
         return df
 
     def _base_row(self, product: CatalogProduct) -> Dict[str, object]:
+        collection_value = product.collection or ""
+        if isinstance(collection_value, str):
+            collection_value = collection_value.strip()
+            if collection_value.lower() == "nan":
+                collection_value = ""
         row: Dict[str, object] = {
             "Handle": slugify(product.title or product.sku),
             "Title": self._refine_title(product.title),
@@ -225,7 +233,7 @@ class CSVGenerator:
             "Published": "TRUE",
             # Tags are finalised after aggregation to include category
             "Tags": ",".join(product.tags) if product.tags else "",
-            "Collection": (product.collection or product.product_type or ""),
+            "Collection": (collection_value or product.product_type or ""),
             "Compare At Price": "",
             "Weight": product.weight or "",
             "Image Src": self.image_resolver(product) or "",
@@ -253,8 +261,13 @@ class CSVGenerator:
         features_value = product.extra.get("features") if product.extra else None
         if isinstance(features_value, str):
             cleaned_features = self._clean_text(features_value)
-            if cleaned_features:
+            if cleaned_features and cleaned_features.lower() != "nan":
                 row["_features"] = cleaned_features
+        description_value = product.extra.get("textos") if product.extra else None
+        if isinstance(description_value, str):
+            cleaned_description = self._clean_text(description_value)
+            if cleaned_description and cleaned_description.lower() != "nan":
+                row["_description"] = cleaned_description
         dm = getattr(self.settings.metafields, "dynamic_mapping", None)
         if dm and dm.enabled and isinstance(dm.map, dict):
             for logical_key, column in dm.map.items():
@@ -457,3 +470,8 @@ class CSVGenerator:
 
 
 __all__ = ["CSVGenerator"]
+
+
+
+
+
