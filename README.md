@@ -1,22 +1,17 @@
 ﻿# NF-e Product Importer
 
-Ferramenta completa para conciliar itens de Notas Fiscais eletrônicas (NF-e) com o catálogo mestre da loja e gerar CSVs no
-formato aceito pelo Shopify. O projeto oferece trás formas de uso: linha de comando, API (FastAPI) e painel de conciliaÃ§Ã£o em
-Streamlit.
+Ferramenta completa para conciliar itens de Notas Fiscais eletrônicas (NF-e) com o catálogo mestre da loja e gerar CSVs no formato aceito pelo Shopify. O projeto oferece três formas de uso: linha de comando, API (FastAPI) e painel de conciliação em Streamlit.
 
 ## Funcionalidades
 
-* **Parser de NF-e 4.0**: leitura dos arquivos XML, extraindo itens com SKU, descrição, GTIN, NCM, CFOP, unidades e valores.
-* **Leitura da ficha técnica**: ingestão do Excel mestre (`example_docs/MART-Ficha-tecnica-*.xlsx`) com normalização das
-  colunas principais.
-* **Motor de matching**: casa automaticamente por SKU, GTIN ou similaridade textual. MantÃ©m um cache de sinônimos para
-  conciliações futuras.
-* **Geração de CSV**: exporta um arquivo no padrÃ£o Shopify com colunas configuráveis e preenche metafields com NCM, CFOP,
-  unidade, etc. Cria também um CSV de pendências.
-* **API FastAPI**: upload de NF-e, disparo de processamento, listagem de execuções e download de arquivos.
-* **Painel Streamlit**: tela para conciliar manualmente pendências, buscar itens no catálogo e registrar equivalências.
-* **Agendador**: opÃ§Ã£o de â€œwatched folderâ€ que roda diariamente ou em intervalos configurados.
-* **Integração opcional com Google Drive**: permite mapear SKUs para links públicos de imagens.
+- **Parser de NF-e 4.0**: leitura dos arquivos XML, extraindo itens com SKU, descrição, GTIN, NCM, CFOP, unidades e valores.
+- **Leitura da ficha técnica**: ingestão do Excel mestre (`example_docs/MART-Ficha-tecnica-*.xlsx`) com normalização das colunas principais.
+- **Motor de matching**: casa automaticamente por SKU, GTIN ou similaridade textual. Mantém um cache de sinônimos para conciliações futuras.
+- **Geração de CSV**: exporta um arquivo no padrão Shopify com colunas configuráveis e preenche metafields com NCM, CFOP, unidade etc. Cria também um CSV de pendências.
+- **API FastAPI**: upload de NF-e, disparo de processamento, listagem de execuções e download de arquivos.
+- **Painel Streamlit**: tela para conciliar manualmente pendências, buscar itens no catálogo e registrar equivalências.
+- **Agendador**: opção de "watched folder" que roda diariamente ou em intervalos configurados.
+- **Integração opcional com Google Drive**: permite mapear SKUs para links públicos de imagens.
 
 ## Requisitos
 
@@ -25,7 +20,7 @@ python3.11
 pip install -r requirements.txt
 ```
 
-## ConfiguraÃ§Ã£o
+## Configuração
 
 Edite o arquivo `config.yaml` ou crie um novo baseado em `config/config.yml.example`. Principais parâmetros:
 
@@ -62,23 +57,23 @@ metafields:
 python -m nfe_importer.main process --config config.yaml
 ```
 
-OpÃ§Ãµes disponÃ­veis:
+Opções disponíveis:
 
-* `process`: processa arquivos na pasta de entrada ou lista fornecida (`process -- files a.xml b.xml`).
-* `watch`: inicia o agendador definido no `config.yaml`.
-* `api`: sobe o servidor FastAPI (`uvicorn`) com endpoints para upload/processamento.
-* `ui`: executa o painel Streamlit para conciliação manual.
+- `process`: processa arquivos na pasta de entrada ou lista fornecida (`process --files a.xml b.xml`).
+- `watch`: inicia o agendador definido no `config.yaml`.
+- `api`: sobe o servidor FastAPI (`uvicorn`) com endpoints para upload/processamento.
+- `ui`: executa o painel Streamlit para conciliação manual.
 
 ### API
 
 ```
 POST /upload/nfe         # upload de arquivos (multipart)
-POST /process            # dispara processamento (opcionalmente informando arquivos especÃ­ficos)
-GET  /runs               # lista execuÃ§Ãµes
+POST /process            # dispara processamento (opcionalmente informando arquivos específicos)
+GET  /runs               # lista execuções
 GET  /exports/{run_id}   # baixa o CSV gerado
-GET  /pendings/{run_id}  # baixa pendÃªncias
-POST /reconcile          # registra equivalÃªncia manual
-POST /catalog/reload     # recarrega a ficha tÃ©cnica
+GET  /pendings/{run_id}  # baixa pendências
+POST /reconcile          # registra equivalência manual
+POST /catalog/reload     # recarrega a ficha técnica
 ```
 
 ### Dashboard (Streamlit)
@@ -87,8 +82,7 @@ POST /catalog/reload     # recarrega a ficha tÃ©cnica
 python -m nfe_importer.main ui --config config.yaml
 ```
 
-O painel permite carregar NF-e, disparar processamentos e conciliar itens com sugestões do catálogo. As escolhas são
-persistidas no cache de sinônimos (`synonyms.json`).
+O painel permite carregar NF-e, disparar processamentos e conciliar itens com sugestões do catálogo. As escolhas são persistidas no cache de sinônimos (`synonyms.json`).
 
 ## Testes
 
@@ -96,47 +90,35 @@ persistidas no cache de sinônimos (`synonyms.json`).
 pytest
 ```
 
-Os testes utilizam os arquivos de exemplo presentes em `example_docs/` para validar o parser, o motor de matching e a geração do
-CSV.
+Os testes utilizam os arquivos de exemplo presentes em `example_docs/` para validar o parser, o motor de matching e a geração do CSV.
 
+### Selecionando versões no dashboard
 
-### Selecionando versoes no dashboard
+A UI agora lista automaticamente as configurações encontradas em `pipelines/**/config.yaml`. Cada versão (V1, V2, Enhanced, Super) aparece com o caminho da configuração ao lado. Basta abrir o painel com:
 
-A UI agora lista automaticamente as configuracoes encontradas em pipelines/**/config.yaml.
-Cada versao (V1, V2, Enhanced, Super) aparece com o caminho da configuracao ao lado. Basta
-abrir o painel com:
-
-`ash
+```bash
 python -m nfe_importer.main ui --config config.yaml
-`
+```
 
-Na barra lateral selecione a versao desejada, carregue os XML e clique em "Processar agora".
-O arquivo de saida e gravado na pasta informada pelo YAML da versao (output/<versao>/).
-O log tambem guarda mode="ui:<versao>" para rastreabilidade.
+Na barra lateral selecione a versão desejada, carregue os XML e clique em "Processar agora". O arquivo de saída é gravado na pasta informada pelo YAML da versão (`output/<versao>/`). O log também guarda `mode="ui:<versao>"` para rastreabilidade.
 
-### Configs por versao
+### Configs por versão
 
-Os YAMLs de referencia ficam em:
+Os YAMLs de referência ficam em:
 
-- pipelines/v1/config.yaml
-- pipelines/v2/config.yaml
-- pipelines/enhanced/config.yaml
-- pipelines/super/config.yaml
+- `pipelines/v1/config.yaml`
+- `pipelines/v2/config.yaml`
+- `pipelines/enhanced/config.yaml`
+- `pipelines/super/config.yaml`
 
-Todos compartilham o mesmo cabeçalho Shopify e mantem os defaults:
-Variant Fulfillment Service=manual, Variant Inventory Policy=deny,
-Variant Inventory Tracker=shopify, Variant Requires Shipping=TRUE e
-Variant Taxable=TRUE.
+Todos compartilham o mesmo cabeçalho Shopify e mantêm os defaults: `Variant Fulfillment Service=manual`, `Variant Inventory Policy=deny`, `Variant Inventory Tracker=shopify`, `Variant Requires Shipping=TRUE` e `Variant Taxable=TRUE`.
 
-### Smoke tests rapidos
+### Smoke tests rápidos
 
-Para validar as quatro versoes com os XMLs de exemplo, execute:
+Para validar as quatro versões com os XMLs de exemplo, execute:
 
-`ash
+```bash
 .\.venv\Scripts\python scripts/run_smoke_tests.py
-`
+```
 
-O script gera um CSV por versao e cria 
-eports/scoreboard.csv com o resultado
-(checks de header, variantes unicas, politicas Shopify e regra g/kg).
-
+O script gera um CSV por versão e cria `reports/scoreboard.csv` com o resultado (checks de header, variantes únicas, políticas Shopify e regra g/kg).

@@ -8,7 +8,7 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 from ..config import Settings
 from .generator import CSVGenerator
@@ -16,7 +16,7 @@ from .matcher import ProductMatcher
 from .models import CatalogProduct, NFEItem, ProcessingSummary
 from .parser import CatalogLoader, NFEParser
 from .synonyms import SynonymCache
-from .utils import dump_json, now_timestamp, slugify
+from .utils import dump_json, load_json, now_timestamp, slugify
 
 
 LOGGER = logging.getLogger(__name__)
@@ -107,6 +107,7 @@ class Processor:
         run_id = now_timestamp()
 
         csv_path, pendings_path, dataframe, pendings_df = self.generator.generate(matched, unmatched, run_id)
+        self._update_metrics(run_id, dataframe)
 
         summary = ProcessingSummary(
             run_id=run_id,
@@ -124,6 +125,53 @@ class Processor:
         self.synonyms.save()
 
         return ProcessingResult(summary=summary, dataframe_path=csv_path, pendings_path=pendings_path)
+
+    def _critical_metafield_columns(self) -> Dict[str, str]:
+        namespace = self.settings.metafields.namespace
+        keys = self.settings.metafields.keys
+        columns: Dict[str, str] = {}
+        for logical in ("ncm", "unidade", "capacidade", "dimensoes_do_produto"):
+            key = keys.get(logical)
+            if not key:
+                continue
+            columns[logical] = f"product.metafields.{namespace}.{key}"
+        return columns
+
+    def _update_metrics(self, run_id: str, dataframe) -> None:
+        if dataframe is None:
+            return
+        columns = self._critical_metafield_columns()
+        if not columns:
+            return
+        total_rows = int(len(dataframe))
+        metrics: Dict[str, Dict[str, int]] = {}
+        for logical, column in columns.items():
+            if column not in dataframe.columns:
+                continue
+            series = dataframe[column].fillna("")
+            cleaned = series.astype(str).str.strip()
+            cleaned = cleaned.where(cleaned.str.lower() != "nan", "")
+            non_empty = int(cleaned.astype(bool).sum())
+            metrics[column] = {
+                "logical": logical,
+                "non_empty": non_empty,
+                "total": total_rows,
+            }
+        if not metrics:
+            return
+        metrics_path = self.settings.paths.log_folder / "metrics.json"
+        payload = load_json(metrics_path) or {"runs": []}
+        runs = payload.get("runs") or []
+        runs = [entry for entry in runs if entry.get("run_id") != run_id]
+        runs.append({
+            "run_id": run_id,
+            "generated_at": datetime.utcnow().isoformat(),
+            "total_rows": total_rows,
+            "fields": metrics,
+        })
+        runs.sort(key=lambda entry: entry.get("generated_at", ""), reverse=True)
+        payload["runs"] = runs[:50]
+        dump_json(metrics_path, payload)
 
     def _persist_summary(self, summary: ProcessingSummary, *, dataframe_rows: int, pendings_rows: int) -> None:
         log_folder = self.settings.paths.log_folder
@@ -221,4 +269,3 @@ class Processor:
 
 
 __all__ = ["Processor", "ProcessingResult"]
-
