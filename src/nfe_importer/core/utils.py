@@ -87,6 +87,17 @@ def normalize_barcode(value: Optional[str]) -> Optional[str]:
     return digits or None
 
 
+
+def clean_multiline_text(value: Optional[str]) -> str:
+    """Normalise multiline text by removing control artefacts and extra whitespace."""
+
+    if not value:
+        return ""
+    s = str(value).replace("_x000D_", " ")
+    s = s.replace("\r\n", "\n").replace("\r", "\n")
+    parts = [" ".join(line.split()).strip() for line in s.split("\n")]
+    return "\n".join([p for p in parts if p])
+
 def slugify(value: str) -> str:
     normalized = normalize_text(value)
     if not normalized:
@@ -144,6 +155,7 @@ def round_money(value: float) -> float:
     return math.floor(value * 100 + 0.5) / 100.0
 
 
+
 __all__ = [
     "ensure_directory",
     "strip_accents",
@@ -158,6 +170,8 @@ __all__ = [
     "dump_json",
     "load_json",
     "round_money",
+    "clean_multiline_text",
     "STOPWORDS_PT",
 ]
+
 

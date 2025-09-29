@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
@@ -10,7 +11,7 @@ import pandas as pd
 
 from ..config import Settings
 from .models import CatalogProduct, MatchDecision, NFEItem, Suggestion, UnmatchedItem
-from .utils import gtin_is_valid, normalize_barcode, round_money, slugify
+from .utils import clean_multiline_text, gtin_is_valid, normalize_barcode, round_money, slugify
 
 
 LOGGER = logging.getLogger(__name__)
@@ -117,20 +118,25 @@ class CSVGenerator:
             row.setdefault("Variant Fulfillment Service", "manual")
 
             # Shipping and weight
-            weight = row.get("Weight")
-            if isinstance(weight, (int, float)) and float(weight) > 0:
-                v = float(weight)
-                # If < 1 kg, export as grams to match guidance
-                if v < 1.0:
-                    row["Variant Weight"] = round(v * 1000, 3)
+            weight_raw = row.pop("Weight", None)
+            weight_unit_hint = row.pop("_weight_unit", None)
+            weight_value = self._parse_weight(weight_raw, weight_unit_hint)
+            if weight_value is not None:
+                grams_value = weight_value * 1000.0
+                if weight_value < 1.0:
+                    row["Variant Weight"] = self._format_number(grams_value, max_decimals=0)
                     row["Variant Weight Unit"] = "g"
                 else:
-                    row["Variant Weight"] = v
-                    row.setdefault("Variant Weight Unit", "kg")
+                    row["Variant Weight"] = self._format_number(weight_value)
+                    row["Variant Weight Unit"] = "kg"
+                row["Variant Grams"] = self._format_number(grams_value, max_decimals=0)
+                row["Weight"] = self._format_number(weight_value)
                 row.setdefault("Variant Requires Shipping", "TRUE")
             else:
+                row["Variant Weight"] = ""
+                row["Variant Weight Unit"] = ""
+                row["Variant Grams"] = ""
                 row.setdefault("Variant Requires Shipping", "TRUE")
-
             # Taxable by default (unless explicitly set elsewhere)
             row.setdefault("Variant Taxable", "TRUE")
 
@@ -146,9 +152,15 @@ class CSVGenerator:
             # Body (HTML): prefer catalogue features or composition if present
             if not row.get("Body (HTML)"):
                 features = self._clean_text(row.get("_features") or "")
-                composition = self._clean_text(row.get("composition") or "")
+                composition_raw = self._clean_text(row.get("composition") or row.get("composicao") or "")
                 inf_ad = self._clean_text(row.get("_infAdProd") or "")
-                parts = [p for p in [features, composition, inf_ad] if p]
+                composition_meta_value = ""
+                composition_key = self.settings.metafields.keys.get("composicao")
+                if composition_key:
+                    meta_column = f"product.metafields.{self.settings.metafields.namespace}.{composition_key}"
+                    composition_meta_value = self._clean_text(row.get(meta_column) or "")
+                composition_body = composition_raw if (composition_raw and not composition_meta_value) else ""
+                parts = [p for p in [features, composition_body, inf_ad] if p]
                 if parts:
                     row["Body (HTML)"] = "\n\n".join(parts)
             # cleanup helper-only fields
@@ -213,6 +225,7 @@ class CSVGenerator:
             "Published": "TRUE",
             # Tags are finalised after aggregation to include category
             "Tags": ",".join(product.tags) if product.tags else "",
+            "Collection": (product.collection or product.product_type or ""),
             "Compare At Price": "",
             "Weight": product.weight or "",
             "Image Src": self.image_resolver(product) or "",
@@ -222,34 +235,105 @@ class CSVGenerator:
             "Variant Requires Shipping": "TRUE",
             "Variant Taxable": "TRUE",
         }
+        if product.ncm:
+            row.setdefault("ncm", str(product.ncm).strip())
+        if product.unit:
+            row.setdefault("unidade", str(product.unit).strip())
+        weight_unit_column = getattr(self.settings.weights, "unit_column", None)
+        if product.extra and weight_unit_column:
+            unit_column = str(weight_unit_column)
+            unit_value = product.extra.get(unit_column) or product.extra.get(unit_column.lower())
+            if unit_value:
+                row["_weight_unit"] = str(unit_value).strip()
         if product.metafields:
-            row["composition"] = self._clean_text(product.metafields.get("composition", ""))
-        if product.extra:
-            row["_features"] = self._clean_text(product.extra.get("features", ""))
-            # Dynamic metafields mapping from catalogue extra columns
-            dm = getattr(self.settings.metafields, "dynamic_mapping", None)
-            if dm and dm.enabled and isinstance(dm.map, dict):
-                ns = self.settings.metafields.namespace
-                for meta_key, col in dm.map.items():
-                    if not col:
-                        continue
-                    val = product.extra.get(col) or product.extra.get(str(col).lower())
-                    if val is None:
-                        continue
-                    text = str(val).strip()
-                    if text and text.lower() != "nan":
-                        row[f"product.metafields.{ns}.{meta_key}"] = text
+            composition_value = self._clean_text(product.metafields.get("composition"))
+            if composition_value:
+                row["composition"] = composition_value
+                row.setdefault("composicao", composition_value)
+        features_value = product.extra.get("features") if product.extra else None
+        if isinstance(features_value, str):
+            cleaned_features = self._clean_text(features_value)
+            if cleaned_features:
+                row["_features"] = cleaned_features
+        dm = getattr(self.settings.metafields, "dynamic_mapping", None)
+        if dm and dm.enabled and isinstance(dm.map, dict):
+            for logical_key, column in dm.map.items():
+                if not column:
+                    continue
+                source = None
+                if product.extra:
+                    source = product.extra.get(column)
+                    if source is None and isinstance(column, str):
+                        source = product.extra.get(column.lower())
+                if source is None and isinstance(column, str):
+                    if hasattr(product, column):
+                        source = getattr(product, column)
+                    elif hasattr(product, column.lower()):
+                        source = getattr(product, column.lower())
+                normalised = self._normalise_dynamic_value(source)
+                if normalised:
+                    row.setdefault(logical_key, normalised)
         return row
 
     @staticmethod
     def _clean_text(value: Optional[str]) -> str:
-        if not value:
+        return clean_multiline_text(value)
+
+    @staticmethod
+    def _normalise_dynamic_value(value: object) -> str:
+        if value is None:
             return ""
-        s = str(value).replace("_x000D_", " ")
-        s = s.replace("\r\n", "\n").replace("\r", "\n")
-        # collapse consecutive whitespace but keep single newlines
-        parts = [" ".join(line.split()).strip() for line in s.split("\n")]
-        return "\n".join([p for p in parts if p])
+        if isinstance(value, str):
+            return clean_multiline_text(value)
+        if isinstance(value, (int, float)):
+            if isinstance(value, float) and pd.isna(value):
+                return ""
+            return CSVGenerator._format_number(float(value))
+        return str(value).strip()
+
+    @staticmethod
+    def _format_number(value: float, max_decimals: int = 3) -> str:
+        formatted = f"{value:.{max_decimals}f}"
+        if "." in formatted:
+            formatted = formatted.rstrip("0").rstrip(".")
+        return formatted or "0"
+
+    def _parse_weight(self, value: object, unit_hint: Optional[str]) -> Optional[float]:
+        if value is None:
+            return None
+        unit = (unit_hint or "").strip().lower()
+        numeric: Optional[float]
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+            lower = text.lower()
+            if lower.endswith("kg"):
+                unit = unit or "kg"
+                text = lower[:-2]
+            elif lower.endswith("g"):
+                unit = unit or "g"
+                text = lower[:-1]
+            text = re.sub(r"[^0-9,.-]", "", text)
+            if not text:
+                return None
+            text = text.replace(",", ".")
+            try:
+                numeric = float(text)
+            except ValueError:
+                return None
+        elif isinstance(value, (int, float)):
+            if isinstance(value, float) and pd.isna(value):
+                return None
+            numeric = float(value)
+        else:
+            return None
+        if numeric <= 0:
+            return None
+        if unit in {"g", "grama", "gramas"}:
+            return numeric / 1000.0
+        return numeric
+
 
     @staticmethod
     def _refine_title(title: Optional[str]) -> str:
@@ -296,15 +380,17 @@ class CSVGenerator:
             if logical == "cfop":
                 value = ";".join(sorted(cfops))
             elif logical == "ncm":
-                value = ";".join(sorted(ncms))
+                value = ";".join(sorted(ncms)) or row.get(logical, "")
             elif logical == "cest":
-                value = ";".join(sorted(cests))
+                value = ";".join(sorted(cests)) or row.get(logical, "")
             elif logical == "unidade":
-                value = ";".join(sorted(units))
+                value = row.get(logical) or ";".join(sorted(units))
             elif logical == "composicao":
-                value = row.get("composition") or ""
+                value = row.get(logical) or row.get("composition") or ""
             else:
                 value = row.get(logical, "")
+            if isinstance(value, str):
+                value = self._clean_text(value)
             row[column] = value
 
     def _metafield_columns(self) -> List[str]:
@@ -371,4 +457,3 @@ class CSVGenerator:
 
 
 __all__ = ["CSVGenerator"]
-
