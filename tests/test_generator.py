@@ -11,6 +11,7 @@ from nfe_importer.config import (
 )
 from nfe_importer.core.generator import CSVGenerator, SHOPIFY_HEADER
 from nfe_importer.core.models import CatalogProduct, MatchDecision, NFEItem
+from nfe_importer.core.parser import CatalogLoader
 
 
 def build_settings(tmp_path: Path) -> Settings:
@@ -35,6 +36,7 @@ def build_settings(tmp_path: Path) -> Settings:
             "modo_de_uso": "modo_de_uso",
             "capacidade": "capacidade",
             "dimensoes_do_produto": "dimensoes_do_produto",
+            "ipi": "ipi",
         },
         dynamic_mapping=MetafieldsConfig.DynamicMap(
             enabled=True,
@@ -45,6 +47,7 @@ def build_settings(tmp_path: Path) -> Settings:
                 "capacidade": "capacidade__ml_ou_peso_suportado",
                 "ncm": "ncm",
                 "modo_de_uso": "features",
+                "ipi": "ipi",
             },
         ),
     )
@@ -266,3 +269,41 @@ def test_body_html_excludes_composition_when_metafield_present(tmp_path):
 
 
 
+
+
+def test_optional_metafields_from_catalog(tmp_path):
+    settings = build_settings(tmp_path)
+    generator = CSVGenerator(settings)
+
+    loader = CatalogLoader(Path('example_docs/MART-Ficha-tecnica-Biblioteca-Virtual-08-08-2025.xlsx'))
+    products = loader.to_products()
+    target = None
+    for product in products:
+        extra = product.extra
+        if extra.get('catalogo') and extra.get('medidas_s_emb') and extra.get('capacidade__ml_ou_peso_suportado') and extra.get('features') and 'ipi' in extra:
+            target = product
+            break
+    assert target is not None
+
+    item = NFEItem(
+        invoice_key='TEST',
+        item_number=1,
+        sku=target.sku,
+        description=target.title,
+        barcode=target.barcode,
+        ncm=target.ncm,
+        cest=target.cest,
+        cfop='5102',
+        unit=target.unit,
+        quantity=1.0,
+        unit_value=10.0,
+        total_value=10.0,
+    )
+    df = generator._build_dataframe([MatchDecision(item=item, product=target, confidence=1.0, match_source='sku')])
+    row = df.iloc[0]
+
+    assert row['product.metafields.custom.catalogo']
+    assert row['product.metafields.custom.dimensoes_do_produto']
+    assert row['product.metafields.custom.capacidade']
+    assert row['product.metafields.custom.modo_de_uso']
+    assert row['product.metafields.custom.ipi']

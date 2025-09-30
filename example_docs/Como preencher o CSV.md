@@ -59,6 +59,7 @@ O template inclui colunas de  **metafields** . Eles armazenam informações adic
 | Coluna                                         | Obrigatório? | Descrição             | Exemplo                | Observações                          |
 | ---------------------------------------------- | ------------- | ----------------------- | ---------------------- | -------------------------------------- |
 | product.metafields.custom.ncm                  | ✅            | Código NCM do produto. | 3307.90.00             | Vem do catálogo ou XML.               |
+| product.metafields.custom.ipi                  | ✅            | Percentual de IPI.     | 10                     | Vem da ficha técnica (coluna IPI).    |
 | product.metafields.custom.unidade              | Opcional      | Unidade de venda.       | UN                     | Normalizar para unidade padrão.       |
 | product.metafields.custom.composicao           | Opcional      | Composição/material.  | Óleos vegetais, ervas | Evitar duplicação no Body HTML.      |
 | product.metafields.custom.dimensoes_do_produto | Opcional      | Dimensões (LxAxP).     | 10x5x3 cm              | Preencher se disponível no catálogo. |

@@ -13,6 +13,7 @@
   - `product.metafields.custom.dimensoes_do_produto` from `medidas_s_emb`.
   - `product.metafields.custom.capacidade` from `capacidade__ml_ou_peso_suportado`.
   - `product.metafields.custom.ncm` from catalogue data when NF-e is empty.
+  - `product.metafields.custom.ipi` from the catalogue IPI column; exported for every product.
 - All catalog texts are normalised: `_x000D_`, duplicated `\r\n`, and extra spaces are removed before exporting.
 - Dynamic mapping is enabled in both Enhanced and Super configs with identical source columns.
 

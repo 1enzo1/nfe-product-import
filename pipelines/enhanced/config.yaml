@@ -83,6 +83,7 @@ metafields:
       dimensoes_do_produto: "medidas_s_emb"
       capacidade: "capacidade__ml_ou_peso_suportado"
       ncm: "ncm"
+      ipi: "ipi"
       modo_de_uso: "features"
 
 variants:

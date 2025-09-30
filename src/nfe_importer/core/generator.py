@@ -393,7 +393,20 @@ class CSVGenerator:
                         source = getattr(product, column.lower())
                 normalised = self._normalise_dynamic_value(source)
                 if normalised:
-                    row.setdefault(logical_key, normalised)
+                    marker = normalised.strip().lower()
+                    if marker not in {"", "nan", "none", "null"}:
+                        row.setdefault(logical_key, normalised)
+        if "ipi" not in row:
+            ipi_value = None
+            if product.extra and "ipi" in product.extra:
+                ipi_value = product.extra.get("ipi")
+            elif product.metafields and "ipi" in product.metafields:
+                ipi_value = product.metafields.get("ipi")
+            normalised_ipi = self._normalise_dynamic_value(ipi_value)
+            if normalised_ipi:
+                marker = normalised_ipi.strip().lower()
+                if marker not in {"", "nan", "none", "null"}:
+                    row["ipi"] = normalised_ipi
         return row
 
     @staticmethod

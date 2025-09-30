@@ -24,6 +24,7 @@ def make_settings(tmp_path: Path, enabled: bool = True) -> Settings:
             "catalogo": "catalogo",
             "dimensoes_do_produto": "dimensoes_do_produto",
             "capacidade": "capacidade",
+            "ipi": "ipi",
         },
         dynamic_mapping=MetafieldsConfig.DynamicMap(
             enabled=enabled,
@@ -32,6 +33,7 @@ def make_settings(tmp_path: Path, enabled: bool = True) -> Settings:
                 "catalogo": "catalogo",
                 "dimensoes_do_produto": "medidas_s_emb",
                 "capacidade": "capacidade__ml_ou_peso_suportado",
+                "ipi": "ipi",
             },
         ),
     )
@@ -74,6 +76,7 @@ def test_dynamic_metafields_mapping(tmp_path: Path) -> None:
                     "catalogo": "Linha Casa",
                     "medidas_s_emb": "10x10x10",
                     "capacidade__ml_ou_peso_suportado": "2L",
+                    "ipi": 12.5,
                 }
             )
         ]
@@ -83,3 +86,12 @@ def test_dynamic_metafields_mapping(tmp_path: Path) -> None:
     assert row["product.metafields.custom.capacidade"] == "2L"
     assert row["product.metafields.custom.catalogo"] == "Linha Casa"
     assert row["product.metafields.custom.unidade"] == "CX"
+    assert row["product.metafields.custom.ipi"] == "12.5"
+
+
+def test_ipi_fallback_without_dynamic_mapping(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path, enabled=False)
+    generator = CSVGenerator(settings)
+    df = generator._build_dataframe([make_decision({"ipi": 0})])
+    row = df.iloc[0]
+    assert row["product.metafields.custom.ipi"] == "0"

@@ -122,3 +122,8 @@ Para validar as quatro versões com os XMLs de exemplo, execute:
 ```
 
 O script gera um CSV por versão e cria `reports/scoreboard.csv` com o resultado (checks de header, variantes únicas, políticas Shopify e regra g/kg).
+
+### Validacao de campos do CSV
+
+Use `venv\Scripts\python.exe scripts/validate_csv_fields.py <caminho-do-csv>` para conferir rapidamente os campos obrigatorios do guia `example_docs/Como preencher o CSV.md`.
+O utilitario aceita arquivos individuais, pastas ou glob patterns e grava um relatorio detalhado em `reports/validation` com a cobertura de cada coluna obrigatoria e opcional.
