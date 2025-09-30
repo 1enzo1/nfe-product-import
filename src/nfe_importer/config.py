@@ -161,6 +161,35 @@ class WatchConfig(BaseModel):
         return value
 
 
+class ExportConfig(BaseModel):
+    """Configuration controlling Shopify export defaults."""
+
+    status: str = Field(
+        "draft",
+        description="Default Shopify product status when exporting (accepted values: 'draft' or 'active')",
+    )
+
+    @validator("status")
+    def _validate_status(cls, value: str) -> str:
+        normalized = (value or "").strip().lower()
+        if normalized not in {"draft", "active"}:
+            raise ValueError("export.status must be either 'draft' or 'active'")
+        return normalized
+
+
+class TagsConfig(BaseModel):
+    """Behaviour for post-processing product tags."""
+
+    drop_short_codes: bool = Field(False, description="Remove tags that look like short alphanumeric codes")
+    min_alpha_len: int = Field(3, description="Minimum number of alphabetic characters required to keep a tag")
+
+    @validator("min_alpha_len")
+    def _validate_min_alpha_len(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("min_alpha_len must be zero or positive")
+        return value
+
+
 class Settings(BaseModel):
     """Top level configuration object."""
 
@@ -176,6 +205,8 @@ class Settings(BaseModel):
         default=None,
         description="Default vendor name used when the catalogue does not provide one",
     )
+    export: ExportConfig = Field(default_factory=ExportConfig)
+    tags: TagsConfig = Field(default_factory=TagsConfig)
 
     class Config:
         arbitrary_types_allowed = True
