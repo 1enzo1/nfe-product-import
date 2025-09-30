@@ -226,6 +226,37 @@ class CatalogLoader:
             if isinstance(price_value, (int, float)):
                 extra["price"] = float(price_value)
 
+            reserved_keys = {
+                "sku",
+                "title",
+                "barcode",
+                "vendor",
+                "product_type",
+                "collection",
+                "unit",
+                "ncm",
+                "cest",
+                "weight",
+                "tags",
+                "composition",
+                "features",
+                "price",
+            }
+            for key, value in data.items():
+                if key in reserved_keys:
+                    continue
+                if value is None:
+                    continue
+                if isinstance(value, float) and pd.isna(value):
+                    continue
+                if isinstance(value, str):
+                    text = value.strip()
+                    if not text or text.lower() == "nan":
+                        continue
+                    extra.setdefault(key, text)
+                else:
+                    extra.setdefault(key, value)
+
             products.append(
                 CatalogProduct(
                     sku=sku,

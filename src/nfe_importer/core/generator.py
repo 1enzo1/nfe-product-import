@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import re
+import unicodedata
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
@@ -116,19 +118,7 @@ class CSVGenerator:
             row.setdefault("Variant Fulfillment Service", "manual")
 
             # Shipping and weight
-            weight = row.get("Weight")
-            if isinstance(weight, (int, float)) and float(weight) > 0:
-                v = float(weight)
-                # If < 1 kg, export as grams to match guidance
-                if v < 1.0:
-                    row["Variant Weight"] = round(v * 1000, 3)
-                    row["Variant Weight Unit"] = "g"
-                else:
-                    row["Variant Weight"] = v
-                    row.setdefault("Variant Weight Unit", "kg")
-                row.setdefault("Variant Requires Shipping", "TRUE")
-            else:
-                row.setdefault("Variant Requires Shipping", "TRUE")
+            self._apply_weight_fields(row)
 
             # Taxable by default (unless explicitly set elsewhere)
             row.setdefault("Variant Taxable", "TRUE")
@@ -140,7 +130,7 @@ class CSVGenerator:
                 tags = [t.strip() for t in str(row["Tags"]).split(",") if t.strip()]
             if product_type and product_type not in tags:
                 tags.insert(0, product_type)
-            row["Tags"] = ",".join(tags)
+            row["Tags"] = ",".join(self._sanitize_tags(tags))
 
             # Body (HTML): prefer catalogue features or composition if present
             if not row.get("Body (HTML)"):
@@ -150,9 +140,16 @@ class CSVGenerator:
                 parts = [p for p in [features, composition, inf_ad] if p]
                 if parts:
                     row["Body (HTML)"] = "\n\n".join(parts)
+
+            row["Body (HTML)"] = self._finalize_body(row)
+            row["Status"] = self._determine_status(row)
+
             # cleanup helper-only fields
             row.pop("_features", None)
             row.pop("_infAdProd", None)
+            row.pop("composition", None)
+            row.pop("_status_override", None)
+            row.pop("_create_as_draft", None)
 
         dataframe = pd.DataFrame(rows.values())
 
@@ -208,7 +205,7 @@ class CSVGenerator:
             "Product Type": product.product_type or "",
             "SKU": product.sku,
             "Barcode": self._valid_barcode(product.barcode),
-            "Status": "active",
+            "Status": self._default_status(),
             "Published": "TRUE",
             # Tags are finalised after aggregation to include category
             "Tags": ",".join(product.tags) if product.tags else "",
@@ -221,6 +218,7 @@ class CSVGenerator:
             "Variant Requires Shipping": "TRUE",
             "Variant Taxable": "TRUE",
         }
+        self._apply_variant_options(row, product)
         if product.metafields:
             row["composition"] = self._clean_text(product.metafields.get("composition", ""))
         if product.extra:
@@ -238,6 +236,10 @@ class CSVGenerator:
                     text = str(val).strip()
                     if text and text.lower() != "nan":
                         row[f"product.metafields.{ns}.{meta_key}"] = text
+            if "status" in product.extra:
+                row["_status_override"] = product.extra["status"]
+            if "create_as_draft" in product.extra:
+                row["_create_as_draft"] = product.extra["create_as_draft"]
         return row
 
     @staticmethod
@@ -249,6 +251,220 @@ class CSVGenerator:
         # collapse consecutive whitespace but keep single newlines
         parts = [" ".join(line.split()).strip() for line in s.split("\n")]
         return "\n".join([p for p in parts if p])
+
+    def _default_status(self) -> str:
+        export_cfg = getattr(self.settings, "export", None)
+        if export_cfg and getattr(export_cfg, "status", None):
+            return export_cfg.status
+        return "draft"
+
+    def _determine_status(self, row: Dict[str, object]) -> str:
+        default_status = self._default_status()
+        override = row.get("_status_override")
+        if isinstance(override, str) and override.strip():
+            normalized = override.strip().lower()
+            if normalized in {"draft", "active"}:
+                return normalized
+        elif override is not None:
+            normalized = str(override).strip().lower()
+            if normalized in {"draft", "active"}:
+                return normalized
+
+        draft_flag = self._coerce_bool(row.get("_create_as_draft"))
+        if draft_flag is True:
+            return "draft"
+        return default_status
+
+    def _apply_weight_fields(self, row: Dict[str, object]) -> None:
+        weight = self._coerce_float(row.get("Weight"))
+        if weight is None or weight <= 0:
+            row.setdefault("Variant Requires Shipping", "TRUE")
+            row.pop("Variant Weight", None)
+            row.pop("Variant Weight Unit", None)
+            row["Variant Grams"] = ""
+            return
+
+        grams = int(round(weight * 1000))
+        row["Variant Grams"] = str(grams)
+        row["Variant Requires Shipping"] = "TRUE"
+        if weight < 1.0:
+            row["Variant Weight Unit"] = "g"
+            row["Variant Weight"] = str(grams)
+        else:
+            row["Variant Weight Unit"] = "kg"
+            row["Variant Weight"] = self._format_decimal(weight)
+        row["Weight"] = self._format_decimal(weight)
+
+    def _sanitize_tags(self, tags: List[str]) -> List[str]:
+        config = getattr(self.settings, "tags", None)
+        drop_short = bool(config and config.drop_short_codes)
+        min_alpha = config.min_alpha_len if config else 3
+        seen: set[str] = set()
+        cleaned: List[str] = []
+        for tag in tags:
+            if not isinstance(tag, str):
+                continue
+            text = " ".join(tag.split()).strip()
+            if not text:
+                continue
+            if drop_short:
+                alpha_count = sum(1 for ch in text if ch.isalpha())
+                if alpha_count < min_alpha:
+                    continue
+            if text not in seen:
+                seen.add(text)
+                cleaned.append(text)
+        return cleaned
+
+    def _composition_column(self) -> Optional[str]:
+        key = self.settings.metafields.keys.get("composicao")
+        if not key:
+            return None
+        namespace = self.settings.metafields.namespace
+        return f"product.metafields.{namespace}.{key}"
+
+    def _finalize_body(self, row: Dict[str, object]) -> str:
+        body_raw = row.get("Body (HTML)") or ""
+        body = self._clean_text(body_raw)
+        comp_column = self._composition_column()
+        composition_value = ""
+        if comp_column and isinstance(row.get(comp_column), str):
+            composition_value = row.get(comp_column, "")
+        if not composition_value and isinstance(row.get("composition"), str):
+            composition_value = row.get("composition", "")
+        if composition_value:
+            body = self._remove_composition(body, composition_value)
+        return body
+
+    def _remove_composition(self, body: str, composition: str) -> str:
+        comp_clean = self._clean_text(composition)
+        if not comp_clean:
+            return body
+        normalized_comp = self._normalize_for_compare(comp_clean)
+        if not normalized_comp:
+            return body
+        segments = [seg.strip() for seg in re.split(r"\n{2,}", body) if seg.strip()]
+        kept = [seg for seg in segments if self._normalize_for_compare(seg) != normalized_comp]
+        if kept and len(kept) != len(segments):
+            return "\n\n".join(kept)
+        lines = [line for line in (part.strip() for part in body.split("\n")) if line]
+        filtered_lines = [line for line in lines if self._normalize_for_compare(line) != normalized_comp]
+        if filtered_lines and len(filtered_lines) != len(lines):
+            return "\n".join(filtered_lines)
+        pattern = re.compile(re.escape(comp_clean), re.IGNORECASE)
+        cleaned = pattern.sub("", body).strip()
+        return self._clean_text(cleaned)
+
+    @staticmethod
+    def _normalize_for_compare(value: str) -> str:
+        normalized = unicodedata.normalize("NFKD", value)
+        normalized = "".join(char for char in normalized if not unicodedata.combining(char))
+        normalized = re.sub(r"\s+", " ", normalized)
+        return normalized.strip().lower()
+
+    def _apply_variant_options(self, row: Dict[str, object], product: CatalogProduct) -> None:
+        variants_cfg = getattr(self.settings, "variants", None)
+        if not variants_cfg or not variants_cfg.enabled:
+            row.setdefault("Option1 Name", "Title")
+            row.setdefault("Option1 Value", "Default Title")
+            row.setdefault("Option2 Name", "")
+            row.setdefault("Option2 Value", "")
+            return
+
+        option1_value = self._get_variant_option_value(product, variants_cfg.option1)
+        option2_value = self._get_variant_option_value(product, variants_cfg.option2)
+
+        if option1_value:
+            row["Option1 Name"] = variants_cfg.option1.name or "Title"
+            row["Option1 Value"] = option1_value
+        else:
+            row["Option1 Name"] = "Title"
+            row["Option1 Value"] = "Default Title"
+
+        if option2_value:
+            row["Option2 Name"] = variants_cfg.option2.name or ""
+            row["Option2 Value"] = option2_value
+        else:
+            row["Option2 Name"] = ""
+            row["Option2 Value"] = ""
+
+    def _get_variant_option_value(self, product: CatalogProduct, option_cfg) -> str:
+        column = getattr(option_cfg, "column", None)
+        if not column:
+            return ""
+        candidates = {
+            column,
+            str(column).lower(),
+            str(column).replace(" ", "_").lower(),
+            str(column).replace("-", "_").lower(),
+        }
+        for key in list(candidates):
+            candidates.add(key.replace("__", "_"))
+
+        for key in candidates:
+            if key in product.extra:
+                value = product.extra.get(key)
+                if value is None:
+                    continue
+                text = str(value).strip()
+                if text and text.lower() != "nan":
+                    return self._clean_text(text)
+        return ""
+
+    def _apply_default_metafield_values(self, row: Dict[str, object]) -> None:
+        for logical in ("icms", "ipi", "pis", "cofins"):
+            value = row.get(logical)
+            if value is None or (isinstance(value, str) and not value.strip()):
+                row[logical] = "0"
+            else:
+                text = str(value).strip()
+                row[logical] = text or "0"
+
+        kit_flag = self._coerce_bool(row.get("componente_de_kit"))
+        row["componente_de_kit"] = "TRUE" if kit_flag else "FALSE"
+
+        resistencia = row.get("resistencia_a_agua")
+        if isinstance(resistencia, str):
+            resistencia = resistencia.strip()
+        elif resistencia is None:
+            resistencia = ""
+        else:
+            resistencia = str(resistencia).strip()
+        row["resistencia_a_agua"] = resistencia or "Não se aplica"
+
+    @staticmethod
+    def _coerce_bool(value: object) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return bool(value)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1", "yes", "sim"}:
+                return True
+            if normalized in {"false", "0", "no", "nao", "não"}:
+                return False
+        return None
+
+    @staticmethod
+    def _coerce_float(value: object) -> Optional[float]:
+        if value is None or value == "":
+            return None
+        if isinstance(value, (int, float)):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+        if isinstance(value, str):
+            try:
+                return float(value.replace(",", "."))
+            except ValueError:
+                return None
+        return None
+
+    @staticmethod
+    def _format_decimal(value: float) -> str:
+        return f"{value:.3f}".rstrip("0").rstrip(".")
 
     @staticmethod
     def _refine_title(title: Optional[str]) -> str:
@@ -288,6 +504,7 @@ class CSVGenerator:
         return round_money(price)
 
     def _fill_metafields(self, row: Dict[str, object], *, cfops: Iterable[str], ncms: Iterable[str], cests: Iterable[str], units: Iterable[str]) -> None:
+        self._apply_default_metafield_values(row)
         metafield_columns = self.settings.metafields.keys
         namespace = self.settings.metafields.namespace
         for logical, key in metafield_columns.items():
