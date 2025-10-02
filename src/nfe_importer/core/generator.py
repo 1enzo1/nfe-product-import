@@ -350,8 +350,8 @@ class CSVGenerator:
         self._apply_variant_options(row, product)
         if product.metafields:
             row["composition"] = self._clean_text(product.metafields.get("composition", ""))
+        self._apply_catalog_details(row, product)
         if product.extra:
-            row["_features"] = self._clean_text(product.extra.get("features", ""))
             # Dynamic metafields mapping from catalogue extra columns
             dm = getattr(self.settings.metafields, "dynamic_mapping", None)
             if dm and dm.enabled and isinstance(dm.map, dict):
@@ -707,6 +707,95 @@ class CSVGenerator:
     def _metafield_columns(self) -> List[str]:
         namespace = self.settings.metafields.namespace
         return [f"product.metafields.{namespace}.{key}" for key in self.settings.metafields.keys.values()]
+
+    def _apply_catalog_details(self, row: Dict[str, object], product: CatalogProduct) -> None:
+        extra = product.extra or {}
+        description = self._coerce_extra_text(extra.get("catalog_description"))
+        if description:
+            row["_description"] = description
+        features = self._coerce_extra_text(extra.get("features"))
+        if features:
+            row["_features"] = features
+        unit_value = self._coerce_extra_text(product.unit or extra.get("unidade"))
+        if unit_value:
+            row["unidade"] = unit_value
+        catalog_value = self._coerce_extra_text(extra.get("catalogo"))
+        if catalog_value:
+            row["catalogo"] = catalog_value
+        capacity_source = extra.get("capacidade") or extra.get("capacidade__ml_ou_peso_suportado")
+        capacity_value = self._coerce_extra_text(capacity_source)
+        if capacity_value:
+            row["capacidade"] = capacity_value
+        resistance_value = self._coerce_extra_text(extra.get("resistencia_a_agua"))
+        if resistance_value:
+            row["resistencia_a_agua"] = resistance_value
+        modo_value = self._coerce_extra_text(extra.get("modo_de_uso") or extra.get("features"))
+        if modo_value:
+            row["modo_de_uso"] = modo_value
+        dimension_value = (
+            extra.get("dimensoes_sem_embalagem")
+            or extra.get("dimensoes_com_embalagem")
+            or extra.get("medidas_s_emb")
+            or extra.get("medidas_c_emb")
+        )
+        dims = self._normalize_dimensions(dimension_value)
+        if dims:
+            row["dimensoes_do_produto"] = dims
+        for fiscal_key in ("icms", "ipi", "pis", "cofins"):
+            formatted = self._format_catalog_number(extra.get(fiscal_key))
+            if formatted:
+                row[fiscal_key] = formatted
+
+    def _coerce_extra_text(self, value: object) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bool):
+            return "TRUE" if value else "FALSE"
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if isinstance(value, float) and pd.isna(value):
+                return ""
+            return self._format_number(float(value), max_decimals=2)
+        text = self._clean_text(str(value))
+        lowered = text.lower()
+        if lowered in {"nan", "none", "null"}:
+            return ""
+        return text
+
+    def _format_catalog_number(self, value: object) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if isinstance(value, float) and pd.isna(value):
+                return ""
+            return self._format_number(float(value), max_decimals=2)
+        text = self._clean_text(str(value))
+        if not text:
+            return ""
+        lowered = text.lower()
+        if lowered in {"nan", "none", "null"}:
+            return ""
+        sanitized = text.replace("%", "").replace(",", ".")
+        try:
+            return self._format_number(float(sanitized), max_decimals=2)
+        except ValueError:
+            return text
+
+    def _normalize_dimensions(self, value: object) -> str:
+        text = self._coerce_extra_text(value)
+        if not text:
+            return ""
+        normalized = text.replace("\u00d7", "x").replace("X", "x")
+        contains_cm = "cm" in normalized.lower()
+        numeric_part = normalized.lower().replace("cm", "")
+        numeric_part = re.sub(r"\s+", "", numeric_part)
+        numeric_part = numeric_part.replace(",", ".")
+        parts = [part for part in re.split(r"x", numeric_part) if part]
+        if len(parts) == 3:
+            formatted = " x ".join(part.strip() for part in parts)
+            if contains_cm:
+                formatted = f"{formatted} cm"
+            return formatted
+        return text
 
     def _build_tags(self, raw_tags: object, product_type: str) -> str:
         tags: List[str] = []

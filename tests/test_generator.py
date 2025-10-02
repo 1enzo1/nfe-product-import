@@ -189,7 +189,7 @@ def test_body_removes_duplicate_composition(tmp_path):
         product_type="Decor",
         weight=0.6,
         metafields={"composition": "100% POLIRRESINA"},
-        extra={"features": "Peça decorativa _x000D_\nCom acabamento brilhante"},
+        extra={"features": "Pe\u00e7a decorativa _x000D_\nCom acabamento brilhante"},
     )
     df = generator._build_dataframe([build_decision_for_product(product)])
     row = df.iloc[0]
@@ -212,7 +212,7 @@ def test_default_fiscal_and_metafield_defaults(tmp_path):
     ):
         assert row[column] == "0"
     assert row["product.metafields.custom.componente_de_kit"] == "FALSE"
-    assert row["product.metafields.custom.resistencia_a_agua"] == "Não se aplica"
+    assert row["product.metafields.custom.resistencia_a_agua"] == "N\u00e3o se aplica"
 
 
 def test_weight_and_grams_conversion(tmp_path):
@@ -258,8 +258,8 @@ def test_status_respects_config_and_ui_flag(tmp_path):
 def test_option1_value_unique_per_handle(tmp_path):
     settings = build_settings(tmp_path)
     generator = CSVGenerator(settings)
-    product_a = CatalogProduct(sku="SKU-1", title="Produto Único", vendor="MART")
-    product_b = CatalogProduct(sku="SKU-2", title="Produto Único", vendor="MART")
+    product_a = CatalogProduct(sku="SKU-1", title="Produto \u00danico", vendor="MART")
+    product_b = CatalogProduct(sku="SKU-2", title="Produto \u00danico", vendor="MART")
     df = generator._build_dataframe([
         build_decision_for_product(product_a),
         build_decision_for_product(product_b),
@@ -276,10 +276,31 @@ def test_tags_sanitization_when_enabled(tmp_path):
         sku="SKU-TAGS",
         title="Produto Tags",
         vendor="MART",
-        product_type="Acessórios",
-        tags=["1T24", "Coleção Nova", "A-01", "Decor"],
+        product_type="Acess\u00f3rios",
+        tags=["1T24", "Cole\u00e7\u00e3o Nova", "A-01", "Decor"],
     )
     df = generator._build_dataframe([build_decision_for_product(product)])
     row = df.iloc[0]
     tags = row["Tags"].split(",") if row["Tags"] else []
-    assert tags == ["Acessórios", "Coleção Nova", "Decor"]
+    assert tags == ["Acess\u00f3rios", "Cole\u00e7\u00e3o Nova", "Decor"]
+
+def test_generator_uses_catalog_ficha_tecnica(tmp_path):
+    settings = build_settings(tmp_path)
+    generator = CSVGenerator(settings)
+    loader = CatalogLoader(Path("example_docs/MART-Ficha-tecnica-Biblioteca-Virtual-08-08-2025.xlsx"))
+    products = loader.to_products()
+    product = next(prod for prod in products if prod.sku == "08158")
+    decision = build_decision_for_product(product, quantity=2.0, unit_value=10.0)
+
+    df = generator._build_dataframe([decision]).set_index("Variant SKU")
+    row = df.loc["08158"]
+
+    assert "Vers\u00e1teis" in row["Body (HTML)"]
+    assert row["product.metafields.custom.catalogo"] == "OUTLET 2025"
+    assert row["product.metafields.custom.dimensoes_do_produto"] == "4 x 13 x 24"
+    assert row["product.metafields.custom.icms"] == "0"
+    assert "Devem ficar" in row["product.metafields.custom.modo_de_uso"]
+    assert row["product.metafields.custom.resistencia_a_agua"] == "N\u00e3o se aplica"
+    tags = row["Tags"].split(",")
+    assert tags[0] == "BANDEJAS"
+    assert "OUTLET 2025" in tags

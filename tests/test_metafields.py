@@ -82,7 +82,7 @@ def test_dynamic_metafields_mapping(tmp_path: Path) -> None:
         ]
     )
     row = df.iloc[0]
-    assert row["product.metafields.custom.dimensoes_do_produto"] == "10x10x10"
+    assert row["product.metafields.custom.dimensoes_do_produto"] == "10 x 10 x 10"
     assert row["product.metafields.custom.capacidade"] == "2L"
     assert row["product.metafields.custom.catalogo"] == "Linha Casa"
     assert row["product.metafields.custom.unidade"] == "CX"
