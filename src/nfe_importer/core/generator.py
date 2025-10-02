@@ -13,6 +13,7 @@ import pandas as pd
 from ..config import Settings
 from .models import CatalogProduct, MatchDecision, NFEItem, Suggestion, UnmatchedItem
 from .utils import clean_multiline_text, gtin_is_valid, normalize_barcode, round_money, slugify
+from .text_splitters import split_usage_from_text
 
 
 LOGGER = logging.getLogger(__name__)
@@ -710,12 +711,29 @@ class CSVGenerator:
 
     def _apply_catalog_details(self, row: Dict[str, object], product: CatalogProduct) -> None:
         extra = product.extra or {}
-        description = self._coerce_extra_text(extra.get("catalog_description"))
-        if description:
-            row["_description"] = description
-        features = self._coerce_extra_text(extra.get("features"))
-        if features:
-            row["_features"] = features
+        text_settings = getattr(self.settings, "text_splitting", None)
+        markers_override = None
+        if text_settings and getattr(text_settings, "usage_markers", None):
+            markers_override = list(text_settings.usage_markers)
+
+        catalog_text = self._coerce_extra_text(extra.get("catalog_description"))
+        features_text = self._coerce_extra_text(extra.get("features"))
+        modo_source_text = self._coerce_extra_text(extra.get("modo_de_uso"))
+
+        desc_cat, uso_cat = split_usage_from_text(catalog_text, markers_override)
+        desc_feat, uso_feat = split_usage_from_text(features_text, markers_override)
+
+        desc_parts = [part.strip() for part in (desc_cat, desc_feat) if part and part.strip()]
+        desc_final = " ".join(desc_parts).strip()
+        if desc_final:
+            row["_description"] = desc_final
+        else:
+            row.pop("_description", None)
+
+        if desc_feat and desc_feat.strip():
+            row["_features"] = desc_feat.strip()
+        else:
+            row.pop("_features", None)
         unit_value = self._coerce_extra_text(product.unit or extra.get("unidade"))
         if unit_value:
             row["unidade"] = unit_value
@@ -729,9 +747,13 @@ class CSVGenerator:
         resistance_value = self._coerce_extra_text(extra.get("resistencia_a_agua"))
         if resistance_value:
             row["resistencia_a_agua"] = resistance_value
-        modo_value = self._coerce_extra_text(extra.get("modo_de_uso") or extra.get("features"))
-        if modo_value:
-            row["modo_de_uso"] = modo_value
+
+        uso_parts = [part.strip() for part in (modo_source_text, uso_cat, uso_feat) if part and part.strip()]
+        uso_final = " ".join(uso_parts).strip()
+        if uso_final:
+            row["modo_de_uso"] = uso_final
+        else:
+            row.pop("modo_de_uso", None)
         dimension_value = (
             extra.get("dimensoes_sem_embalagem")
             or extra.get("dimensoes_com_embalagem")
