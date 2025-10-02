@@ -233,8 +233,6 @@ class CSVGenerator:
             # Body (HTML): prefer catalogue description (textos) when available
             if not row.get("Body (HTML)"):
                 description = self._clean_text(row.get("_description") or "")
-                if not description:
-                    description = self._clean_text(row.get("_features") or "")
                 composition_raw = self._clean_text(row.get("composition") or row.get("composicao") or "")
                 inf_ad = self._clean_text(row.get("_infAdProd") or "")
                 composition_meta_value = ""
