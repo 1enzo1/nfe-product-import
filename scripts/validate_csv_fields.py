@@ -65,34 +65,87 @@ def find_marker_in_text(text: str, markers: Sequence[str]) -> tuple[str | None, 
     return best_marker, best_idx
 
 
+
+
 def collect_warnings(dataframe: pd.DataFrame, markers: Sequence[str]) -> List[Dict[str, str]]:
     warnings: List[Dict[str, str]] = []
     body_col = USAGE_WARNING_FIELD
     comp_col = 'product.metafields.custom.composicao'
-    if body_col not in dataframe.columns:
-        return warnings
+    modo_col = 'product.metafields.custom.modo_de_uso'
 
-    body_series = dataframe[body_col].fillna('').astype(str)
-    if comp_col in dataframe.columns:
-        composition_series = dataframe[comp_col].fillna('').astype(str)
-    else:
-        composition_series = pd.Series([''] * len(dataframe), index=dataframe.index)
+    index = dataframe.index
+    body_series = dataframe[body_col].fillna('').astype(str) if body_col in dataframe.columns else pd.Series([''] * len(index), index=index, dtype=str)
+    composition_series = dataframe[comp_col].fillna('').astype(str) if comp_col in dataframe.columns else pd.Series([''] * len(index), index=index, dtype=str)
+    modo_series = dataframe[modo_col].fillna('').astype(str) if modo_col in dataframe.columns else pd.Series([''] * len(index), index=index, dtype=str)
 
     sku_columns = [col for col in ('Variant SKU', 'SKU', 'Handle') if col in dataframe.columns]
     composition_keywords = tuple(keyword.casefold() for keyword in COMPOSITION_WARNING_KEYWORDS)
+    taxonomy_fields = ['Product Category', 'Type', 'Collection']
 
-    for idx, body in body_series.items():
-        body_text = str(body).strip()
-        if not body_text:
-            continue
-        sku_value = ''
+    def resolve_sku(idx) -> str:
         for col in sku_columns:
-            raw = dataframe.at[idx, col]
+            raw = dataframe.at[idx, col] if col in dataframe.columns else ''
             if pd.notna(raw):
                 candidate = str(raw).strip()
                 if candidate:
-                    sku_value = candidate
+                    return candidate
+        return ''
+
+    for idx in index:
+        sku_value = resolve_sku(idx)
+        body_text = body_series.get(idx, '').strip()
+        modo_text = modo_series.get(idx, '').strip()
+        composition_text = composition_series.get(idx, '').strip()
+        composition_lower = composition_text.casefold()
+
+        # enforce empty taxonomy fields (must remain blank)
+        taxonomy_non_empty = False
+        for field in taxonomy_fields:
+            if field in dataframe.columns:
+                raw = dataframe.at[idx, field]
+                value = str(raw).strip() if pd.notna(raw) else ''
+                if value:
+                    taxonomy_non_empty = True
                     break
+        if taxonomy_non_empty:
+            warnings.append({
+                'sku': sku_value,
+                'field': 'Product Category/Type/Collection',
+                'warning_type': 'empty_enforced',
+                'snippet': 'must be empty',
+            })
+
+        # option consistency
+        for option in range(1, 4):
+            name_key = f'Option{option} Name'
+            value_key = f'Option{option} Value'
+            name = ''
+            value = ''
+            if name_key in dataframe.columns:
+                raw = dataframe.at[idx, name_key]
+                if pd.notna(raw):
+                    name = str(raw).strip()
+            if value_key in dataframe.columns:
+                raw = dataframe.at[idx, value_key]
+                if pd.notna(raw):
+                    value = str(raw).strip()
+            if value and not name:
+                warnings.append({
+                    'sku': sku_value,
+                    'field': f'Option{option}',
+                    'warning_type': 'option_consistency',
+                    'snippet': 'value-without-name',
+                })
+            elif name and not value:
+                warnings.append({
+                    'sku': sku_value,
+                    'field': f'Option{option}',
+                    'warning_type': 'option_consistency',
+                    'snippet': 'name-without-value',
+                })
+
+        if not body_text:
+            continue
 
         marker, marker_idx = find_marker_in_text(body_text, markers)
         if marker and marker_idx != -1:
@@ -104,8 +157,6 @@ def collect_warnings(dataframe: pd.DataFrame, markers: Sequence[str]) -> List[Di
                 'snippet': snippet,
             })
 
-        composition_text = composition_series.get(idx, '')
-        composition_lower = str(composition_text).casefold()
         body_lower = body_text.casefold()
         for keyword in composition_keywords:
             idx_kw = body_lower.find(keyword)
@@ -119,7 +170,26 @@ def collect_warnings(dataframe: pd.DataFrame, markers: Sequence[str]) -> List[Di
                 })
                 break
 
+        # Body source heuristics
+        if len(body_text) < 40:
+            snippet = extract_snippet(body_text, 0, len(body_text))
+            warnings.append({
+                'sku': sku_value,
+                'field': body_col,
+                'warning_type': 'body_source',
+                'snippet': 'body-too-short: ' + snippet,
+            })
+        elif modo_text and body_lower == modo_text.casefold():
+            snippet = extract_snippet(body_text, 0, len(body_text))
+            warnings.append({
+                'sku': sku_value,
+                'field': body_col,
+                'warning_type': 'body_source',
+                'snippet': 'same-as-modo-de-uso: ' + snippet,
+            })
+
     return warnings
+
 
 
 @dataclass(frozen=True)
