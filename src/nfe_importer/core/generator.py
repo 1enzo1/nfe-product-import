@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
@@ -214,31 +215,19 @@ class CSVGenerator:
             row.setdefault("Variant Fulfillment Service", "manual")
 
             # Shipping and weight
-            weight_raw = row.pop("Weight", None)
-            weight_unit_hint = row.pop("_weight_unit", None)
-            weight_value = self._parse_weight(weight_raw, weight_unit_hint)
-            if weight_value is not None:
-                grams_value = weight_value * 1000.0
-                if weight_value < 1.0:
-                    row["Variant Weight"] = self._format_number(grams_value, max_decimals=0)
-                    row["Variant Weight Unit"] = "g"
-                else:
-                    row["Variant Weight"] = self._format_number(weight_value)
-                    row["Variant Weight Unit"] = "kg"
-                row["Variant Grams"] = self._format_number(grams_value, max_decimals=0)
-                row["Weight"] = self._format_number(weight_value)
-                row.setdefault("Variant Requires Shipping", "TRUE")
-            else:
-                row["Variant Weight"] = ""
-                row["Variant Weight Unit"] = ""
-                row["Variant Grams"] = ""
-                row.setdefault("Variant Requires Shipping", "TRUE")
+            self._apply_weight_fields(row)
+
             # Taxable by default (unless explicitly set elsewhere)
             row.setdefault("Variant Taxable", "TRUE")
 
             # Tags: include category (product_type) plus existing tags without códigos internos
             product_type = row.get("Product Type") or ""
-            row["Tags"] = self._build_tags(row.get("Tags"), product_type)
+            tags = []
+            if isinstance(row.get("Tags"), str) and row["Tags"].strip():
+                tags = [t.strip() for t in str(row["Tags"]).split(",") if t.strip()]
+            if product_type and product_type not in tags:
+                tags.insert(0, product_type)
+            row["Tags"] = ",".join(self._sanitize_tags(tags))
 
             # Body (HTML): prefer catalogue description (textos) when available
             if not row.get("Body (HTML)"):
@@ -256,10 +245,17 @@ class CSVGenerator:
                 parts = [p for p in [description, composition_body, inf_ad] if p]
                 if parts:
                     row["Body (HTML)"] = "\n\n".join(parts)
+
+            row["Body (HTML)"] = self._finalize_body(row)
+            row["Status"] = self._determine_status(row)
+
             # cleanup helper-only fields
             row.pop("_features", None)
             row.pop("_description", None)
             row.pop("_infAdProd", None)
+            row.pop("composition", None)
+            row.pop("_status_override", None)
+            row.pop("_create_as_draft", None)
 
         dataframe = pd.DataFrame(rows.values())
 
@@ -335,7 +331,7 @@ class CSVGenerator:
             "Product Type": product_type_value,
             "SKU": product.sku,
             "Barcode": self._valid_barcode(product.barcode),
-            "Status": self.default_status,
+            "Status": self._default_status(),
             "Published": "TRUE",
             # Tags are finalised after aggregation to include category
             "Tags": ",".join(product.tags) if product.tags else "",
@@ -351,62 +347,28 @@ class CSVGenerator:
             "Variant Requires Shipping": "TRUE",
             "Variant Taxable": "TRUE",
         }
-        if product.ncm:
-            row.setdefault("ncm", str(product.ncm).strip())
-        if product.unit:
-            row.setdefault("unidade", str(product.unit).strip())
-        weight_unit_column = getattr(self.settings.weights, "unit_column", None)
-        if product.extra and weight_unit_column:
-            unit_column = str(weight_unit_column)
-            unit_value = product.extra.get(unit_column) or product.extra.get(unit_column.lower())
-            if unit_value:
-                row["_weight_unit"] = str(unit_value).strip()
+        self._apply_variant_options(row, product)
         if product.metafields:
-            composition_value = self._clean_text(product.metafields.get("composition"))
-            if composition_value:
-                row["composition"] = composition_value
-                row.setdefault("composicao", composition_value)
-        features_value = product.extra.get("features") if product.extra else None
-        if isinstance(features_value, str):
-            cleaned_features = self._clean_text(features_value)
-            if cleaned_features and cleaned_features.lower() != "nan":
-                row["_features"] = cleaned_features
-        description_value = product.extra.get("textos") if product.extra else None
-        if isinstance(description_value, str):
-            cleaned_description = self._clean_text(description_value)
-            if cleaned_description and cleaned_description.lower() != "nan":
-                row["_description"] = cleaned_description
-        dm = getattr(self.settings.metafields, "dynamic_mapping", None)
-        if dm and dm.enabled and isinstance(dm.map, dict):
-            for logical_key, column in dm.map.items():
-                if not column:
-                    continue
-                source = None
-                if product.extra:
-                    source = product.extra.get(column)
-                    if source is None and isinstance(column, str):
-                        source = product.extra.get(column.lower())
-                if source is None and isinstance(column, str):
-                    if hasattr(product, column):
-                        source = getattr(product, column)
-                    elif hasattr(product, column.lower()):
-                        source = getattr(product, column.lower())
-                normalised = self._normalise_dynamic_value(source)
-                if normalised:
-                    marker = normalised.strip().lower()
-                    if marker not in {"", "nan", "none", "null"}:
-                        row.setdefault(logical_key, normalised)
-        if "ipi" not in row:
-            ipi_value = None
-            if product.extra and "ipi" in product.extra:
-                ipi_value = product.extra.get("ipi")
-            elif product.metafields and "ipi" in product.metafields:
-                ipi_value = product.metafields.get("ipi")
-            normalised_ipi = self._normalise_dynamic_value(ipi_value)
-            if normalised_ipi:
-                marker = normalised_ipi.strip().lower()
-                if marker not in {"", "nan", "none", "null"}:
-                    row["ipi"] = normalised_ipi
+            row["composition"] = self._clean_text(product.metafields.get("composition", ""))
+        self._apply_catalog_details(row, product)
+        if product.extra:
+            # Dynamic metafields mapping from catalogue extra columns
+            dm = getattr(self.settings.metafields, "dynamic_mapping", None)
+            if dm and dm.enabled and isinstance(dm.map, dict):
+                ns = self.settings.metafields.namespace
+                for meta_key, col in dm.map.items():
+                    if not col:
+                        continue
+                    val = product.extra.get(col) or product.extra.get(str(col).lower())
+                    if val is None:
+                        continue
+                    text = str(val).strip()
+                    if text and text.lower() != "nan":
+                        row[f"product.metafields.{ns}.{meta_key}"] = text
+            if "status" in product.extra:
+                row["_status_override"] = product.extra["status"]
+            if "create_as_draft" in product.extra:
+                row["_create_as_draft"] = product.extra["create_as_draft"]
         return row
 
     @staticmethod
@@ -469,6 +431,220 @@ class CSVGenerator:
         return numeric
 
 
+    def _default_status(self) -> str:
+        export_cfg = getattr(self.settings, "export", None)
+        if export_cfg and getattr(export_cfg, "status", None):
+            return export_cfg.status
+        return "draft"
+
+    def _determine_status(self, row: Dict[str, object]) -> str:
+        default_status = self._default_status()
+        override = row.get("_status_override")
+        if isinstance(override, str) and override.strip():
+            normalized = override.strip().lower()
+            if normalized in {"draft", "active"}:
+                return normalized
+        elif override is not None:
+            normalized = str(override).strip().lower()
+            if normalized in {"draft", "active"}:
+                return normalized
+
+        draft_flag = self._coerce_bool(row.get("_create_as_draft"))
+        if draft_flag is True:
+            return "draft"
+        return default_status
+
+    def _apply_weight_fields(self, row: Dict[str, object]) -> None:
+        weight = self._coerce_float(row.get("Weight"))
+        if weight is None or weight <= 0:
+            row.setdefault("Variant Requires Shipping", "TRUE")
+            row.pop("Variant Weight", None)
+            row.pop("Variant Weight Unit", None)
+            row["Variant Grams"] = ""
+            return
+
+        grams = int(round(weight * 1000))
+        row["Variant Grams"] = str(grams)
+        row["Variant Requires Shipping"] = "TRUE"
+        if weight < 1.0:
+            row["Variant Weight Unit"] = "g"
+            row["Variant Weight"] = str(grams)
+        else:
+            row["Variant Weight Unit"] = "kg"
+            row["Variant Weight"] = self._format_decimal(weight)
+        row["Weight"] = self._format_decimal(weight)
+
+    def _sanitize_tags(self, tags: List[str]) -> List[str]:
+        config = getattr(self.settings, "tags", None)
+        drop_short = bool(config and config.drop_short_codes)
+        min_alpha = config.min_alpha_len if config else 3
+        seen: set[str] = set()
+        cleaned: List[str] = []
+        for tag in tags:
+            if not isinstance(tag, str):
+                continue
+            text = " ".join(tag.split()).strip()
+            if not text:
+                continue
+            if drop_short:
+                alpha_count = sum(1 for ch in text if ch.isalpha())
+                if alpha_count < min_alpha:
+                    continue
+            if text not in seen:
+                seen.add(text)
+                cleaned.append(text)
+        return cleaned
+
+    def _composition_column(self) -> Optional[str]:
+        key = self.settings.metafields.keys.get("composicao")
+        if not key:
+            return None
+        namespace = self.settings.metafields.namespace
+        return f"product.metafields.{namespace}.{key}"
+
+    def _finalize_body(self, row: Dict[str, object]) -> str:
+        body_raw = row.get("Body (HTML)") or ""
+        body = self._clean_text(body_raw)
+        comp_column = self._composition_column()
+        composition_value = ""
+        if comp_column and isinstance(row.get(comp_column), str):
+            composition_value = row.get(comp_column, "")
+        if not composition_value and isinstance(row.get("composition"), str):
+            composition_value = row.get("composition", "")
+        if composition_value:
+            body = self._remove_composition(body, composition_value)
+        return body
+
+    def _remove_composition(self, body: str, composition: str) -> str:
+        comp_clean = self._clean_text(composition)
+        if not comp_clean:
+            return body
+        normalized_comp = self._normalize_for_compare(comp_clean)
+        if not normalized_comp:
+            return body
+        segments = [seg.strip() for seg in re.split(r"\n{2,}", body) if seg.strip()]
+        kept = [seg for seg in segments if self._normalize_for_compare(seg) != normalized_comp]
+        if kept and len(kept) != len(segments):
+            return "\n\n".join(kept)
+        lines = [line for line in (part.strip() for part in body.split("\n")) if line]
+        filtered_lines = [line for line in lines if self._normalize_for_compare(line) != normalized_comp]
+        if filtered_lines and len(filtered_lines) != len(lines):
+            return "\n".join(filtered_lines)
+        pattern = re.compile(re.escape(comp_clean), re.IGNORECASE)
+        cleaned = pattern.sub("", body).strip()
+        return self._clean_text(cleaned)
+
+    @staticmethod
+    def _normalize_for_compare(value: str) -> str:
+        normalized = unicodedata.normalize("NFKD", value)
+        normalized = "".join(char for char in normalized if not unicodedata.combining(char))
+        normalized = re.sub(r"\s+", " ", normalized)
+        return normalized.strip().lower()
+
+    def _apply_variant_options(self, row: Dict[str, object], product: CatalogProduct) -> None:
+        variants_cfg = getattr(self.settings, "variants", None)
+        if not variants_cfg or not variants_cfg.enabled:
+            row.setdefault("Option1 Name", "Title")
+            row.setdefault("Option1 Value", "Default Title")
+            row.setdefault("Option2 Name", "")
+            row.setdefault("Option2 Value", "")
+            return
+
+        option1_value = self._get_variant_option_value(product, variants_cfg.option1)
+        option2_value = self._get_variant_option_value(product, variants_cfg.option2)
+
+        if option1_value:
+            row["Option1 Name"] = variants_cfg.option1.name or "Title"
+            row["Option1 Value"] = option1_value
+        else:
+            row["Option1 Name"] = "Title"
+            row["Option1 Value"] = "Default Title"
+
+        if option2_value:
+            row["Option2 Name"] = variants_cfg.option2.name or ""
+            row["Option2 Value"] = option2_value
+        else:
+            row["Option2 Name"] = ""
+            row["Option2 Value"] = ""
+
+    def _get_variant_option_value(self, product: CatalogProduct, option_cfg) -> str:
+        column = getattr(option_cfg, "column", None)
+        if not column:
+            return ""
+        candidates = {
+            column,
+            str(column).lower(),
+            str(column).replace(" ", "_").lower(),
+            str(column).replace("-", "_").lower(),
+        }
+        for key in list(candidates):
+            candidates.add(key.replace("__", "_"))
+
+        for key in candidates:
+            if key in product.extra:
+                value = product.extra.get(key)
+                if value is None:
+                    continue
+                text = str(value).strip()
+                if text and text.lower() != "nan":
+                    return self._clean_text(text)
+        return ""
+
+    def _apply_default_metafield_values(self, row: Dict[str, object]) -> None:
+        for logical in ("icms", "ipi", "pis", "cofins"):
+            value = row.get(logical)
+            if value is None or (isinstance(value, str) and not value.strip()):
+                row[logical] = "0"
+            else:
+                text = str(value).strip()
+                row[logical] = text or "0"
+
+        kit_flag = self._coerce_bool(row.get("componente_de_kit"))
+        row["componente_de_kit"] = "TRUE" if kit_flag else "FALSE"
+
+        resistencia = row.get("resistencia_a_agua")
+        if isinstance(resistencia, str):
+            resistencia = resistencia.strip()
+        elif resistencia is None:
+            resistencia = ""
+        else:
+            resistencia = str(resistencia).strip()
+        row["resistencia_a_agua"] = resistencia or "Não se aplica"
+
+    @staticmethod
+    def _coerce_bool(value: object) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return bool(value)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1", "yes", "sim"}:
+                return True
+            if normalized in {"false", "0", "no", "nao", "não"}:
+                return False
+        return None
+
+    @staticmethod
+    def _coerce_float(value: object) -> Optional[float]:
+        if value is None or value == "":
+            return None
+        if isinstance(value, (int, float)):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+        if isinstance(value, str):
+            try:
+                return float(value.replace(",", "."))
+            except ValueError:
+                return None
+        return None
+
+    @staticmethod
+    def _format_decimal(value: float) -> str:
+        return f"{value:.3f}".rstrip("0").rstrip(".")
+
     @staticmethod
     def _refine_title(title: Optional[str]) -> str:
         """Refine product title for CSV output.
@@ -507,6 +683,7 @@ class CSVGenerator:
         return round_money(price)
 
     def _fill_metafields(self, row: Dict[str, object], *, cfops: Iterable[str], ncms: Iterable[str], cests: Iterable[str], units: Iterable[str]) -> None:
+        self._apply_default_metafield_values(row)
         metafield_columns = self.settings.metafields.keys
         namespace = self.settings.metafields.namespace
         for logical, key in metafield_columns.items():
@@ -530,6 +707,95 @@ class CSVGenerator:
     def _metafield_columns(self) -> List[str]:
         namespace = self.settings.metafields.namespace
         return [f"product.metafields.{namespace}.{key}" for key in self.settings.metafields.keys.values()]
+
+    def _apply_catalog_details(self, row: Dict[str, object], product: CatalogProduct) -> None:
+        extra = product.extra or {}
+        description = self._coerce_extra_text(extra.get("catalog_description"))
+        if description:
+            row["_description"] = description
+        features = self._coerce_extra_text(extra.get("features"))
+        if features:
+            row["_features"] = features
+        unit_value = self._coerce_extra_text(product.unit or extra.get("unidade"))
+        if unit_value:
+            row["unidade"] = unit_value
+        catalog_value = self._coerce_extra_text(extra.get("catalogo"))
+        if catalog_value:
+            row["catalogo"] = catalog_value
+        capacity_source = extra.get("capacidade") or extra.get("capacidade__ml_ou_peso_suportado")
+        capacity_value = self._coerce_extra_text(capacity_source)
+        if capacity_value:
+            row["capacidade"] = capacity_value
+        resistance_value = self._coerce_extra_text(extra.get("resistencia_a_agua"))
+        if resistance_value:
+            row["resistencia_a_agua"] = resistance_value
+        modo_value = self._coerce_extra_text(extra.get("modo_de_uso") or extra.get("features"))
+        if modo_value:
+            row["modo_de_uso"] = modo_value
+        dimension_value = (
+            extra.get("dimensoes_sem_embalagem")
+            or extra.get("dimensoes_com_embalagem")
+            or extra.get("medidas_s_emb")
+            or extra.get("medidas_c_emb")
+        )
+        dims = self._normalize_dimensions(dimension_value)
+        if dims:
+            row["dimensoes_do_produto"] = dims
+        for fiscal_key in ("icms", "ipi", "pis", "cofins"):
+            formatted = self._format_catalog_number(extra.get(fiscal_key))
+            if formatted:
+                row[fiscal_key] = formatted
+
+    def _coerce_extra_text(self, value: object) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bool):
+            return "TRUE" if value else "FALSE"
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if isinstance(value, float) and pd.isna(value):
+                return ""
+            return self._format_number(float(value), max_decimals=2)
+        text = self._clean_text(str(value))
+        lowered = text.lower()
+        if lowered in {"nan", "none", "null"}:
+            return ""
+        return text
+
+    def _format_catalog_number(self, value: object) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if isinstance(value, float) and pd.isna(value):
+                return ""
+            return self._format_number(float(value), max_decimals=2)
+        text = self._clean_text(str(value))
+        if not text:
+            return ""
+        lowered = text.lower()
+        if lowered in {"nan", "none", "null"}:
+            return ""
+        sanitized = text.replace("%", "").replace(",", ".")
+        try:
+            return self._format_number(float(sanitized), max_decimals=2)
+        except ValueError:
+            return text
+
+    def _normalize_dimensions(self, value: object) -> str:
+        text = self._coerce_extra_text(value)
+        if not text:
+            return ""
+        normalized = text.replace("\u00d7", "x").replace("X", "x")
+        contains_cm = "cm" in normalized.lower()
+        numeric_part = normalized.lower().replace("cm", "")
+        numeric_part = re.sub(r"\s+", "", numeric_part)
+        numeric_part = numeric_part.replace(",", ".")
+        parts = [part for part in re.split(r"x", numeric_part) if part]
+        if len(parts) == 3:
+            formatted = " x ".join(part.strip() for part in parts)
+            if contains_cm:
+                formatted = f"{formatted} cm"
+            return formatted
+        return text
 
     def _build_tags(self, raw_tags: object, product_type: str) -> str:
         tags: List[str] = []

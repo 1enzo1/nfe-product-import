@@ -59,6 +59,13 @@ csv_output:
     - "Collection"
     - "Status"
 
+export:
+  status: "draft"
+
+tags:
+  drop_short_codes: false
+  min_alpha_len: 3
+
 metafields:
   namespace: "custom"
   keys:

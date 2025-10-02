@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import re
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, List, Optional
@@ -139,7 +141,11 @@ class NFEParser:
 
 
 def _sanitise_column(name: str) -> str:
-    return "".join(char.lower() if char.isalnum() else "_" for char in name).strip("_")
+    normalized = unicodedata.normalize("NFKD", str(name))
+    normalized = "".join(char for char in normalized if unicodedata.category(char) != "Mn")
+    cleaned = "".join(char.lower() if char.isalnum() else "_" for char in normalized)
+    cleaned = re.sub(r"_+", "_", cleaned)
+    return cleaned.strip("_")
 
 
 class CatalogLoader:
@@ -173,6 +179,19 @@ class CatalogLoader:
         "preco": "price",
         "preco_venda": "price",
         "preco_sugerido": "price",
+        "catalogo": "catalogo",
+        "capacidade__ml_ou_peso_suportado": "capacidade",
+        "textos": "catalog_description",
+        "medidas_s_emb": "dimensoes_sem_embalagem",
+        "medidas_c_emb": "dimensoes_com_embalagem",
+        "pais_orig": "pais_origem",
+        "agua": "resistencia_a_agua",
+        "linha": "linha",
+        "cor_1": "cor_1",
+        "multiplo": "multiplo",
+        "icm": "icms",
+        "i_i": "ii",
+        "tipo_campo": "tipo_campo",
     }
 
     def __init__(self, excel_path: Path, sheet_name=0) -> None:
@@ -201,6 +220,12 @@ class CatalogLoader:
             collection = str(data.get("collection") or "").strip() or None
             if isinstance(collection, str) and collection.lower() == "nan":
                 collection = None
+            if not collection:
+                raw_linha = data.get("linha")
+                if isinstance(raw_linha, str):
+                    candidate = clean_multiline_text(raw_linha)
+                    if candidate and candidate.lower() != "nan":
+                        collection = candidate
             unit = str(data.get("unit") or "").strip() or None
             ncm = str(data.get("ncm") or "").strip() or None
             cest = str(data.get("cest") or "").strip() or None
@@ -215,6 +240,14 @@ class CatalogLoader:
             if isinstance(raw_tags, str):
                 cleaned_tags = clean_multiline_text(raw_tags)
                 tags = [tag.strip() for tag in cleaned_tags.replace("\n", ",").split(",") if tag.strip()]
+            extra_tag_sources = ("catalogo", "linha", "cor_1")
+            for tag_key in extra_tag_sources:
+                raw_value = data.get(tag_key)
+                if isinstance(raw_value, str):
+                    candidate = clean_multiline_text(raw_value).strip()
+                    if candidate and candidate.lower() != "nan":
+                        if candidate not in tags:
+                            tags.append(candidate)
 
             metafields = {}
             composition_value = data.get("composition")
@@ -250,12 +283,45 @@ class CatalogLoader:
                 if isinstance(value, float) and pd.isna(value):
                     continue
                 if isinstance(value, str):
-                    cleaned_value = clean_multiline_text(value)
+                    cleaned_value = clean_multiline_text(value).strip()
                     if not cleaned_value:
+                        continue
+                    if cleaned_value.lower() in {"nan", "none", "null"}:
                         continue
                     extra[key] = cleaned_value
                     continue
                 extra[key] = value
+
+            reserved_keys = {
+                "sku",
+                "title",
+                "barcode",
+                "vendor",
+                "product_type",
+                "collection",
+                "unit",
+                "ncm",
+                "cest",
+                "weight",
+                "tags",
+                "composition",
+                "features",
+                "price",
+            }
+            for key, value in data.items():
+                if key in reserved_keys:
+                    continue
+                if value is None:
+                    continue
+                if isinstance(value, float) and pd.isna(value):
+                    continue
+                if isinstance(value, str):
+                    text_value = clean_multiline_text(value).strip()
+                    if not text_value or text_value.lower() in {"nan", "none", "null"}:
+                        continue
+                    extra.setdefault(key, text_value)
+                else:
+                    extra.setdefault(key, value)
 
             products.append(
                 CatalogProduct(
