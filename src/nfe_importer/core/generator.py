@@ -246,6 +246,12 @@ class CSVGenerator:
                     row["Body (HTML)"] = "\n\n".join(parts)
 
             row["Body (HTML)"] = self._finalize_body(row)
+
+            # Shopify taxonomy must be inferred via tags; keep explicit fields empty
+            row["Product Category"] = ""
+            row["Type"] = ""
+            row["Collection"] = ""
+
             row["Status"] = self._determine_status(row)
 
             # cleanup helper-only fields
