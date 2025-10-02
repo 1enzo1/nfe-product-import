@@ -18,6 +18,16 @@ from .text_splitters import split_usage_from_text
 
 LOGGER = logging.getLogger(__name__)
 
+SIZE_TOKEN_SET = {
+    'pp', 'p', 'm', 'g', 'gg', 'xg', 'xp', 'xxg', 'eg', 'xl', 'xxl',
+}
+SIZE_NUMERIC_RANGE = set(range(30, 61))
+SIZE_COMPACT_SET = {token.replace(' ', '').replace('-', '') for token in SIZE_TOKEN_SET}
+COLOR_TOKEN_SET = {
+    'preto', 'branco', 'azul', 'verde', 'vermelho', 'amarelo', 'rosa', 'roxo', 'prata', 'dourado', 'marrom', 'cinza', 'bege', 'cobre', 'grafite', 'laranja', 'marfim', 'vinho', 'lilas', 'turquesa', 'off white', 'off-white', 'branco gelo', 'branco neve', 'chumbo', 'preto fosco', 'preto brilho',
+}
+CAPACITY_UNITS = ('ml', 'l', 'litro', 'litros', 'g', 'kg')
+
 SHOPIFY_HEADER = [
     "Handle",
     "Title",
@@ -542,29 +552,88 @@ class CSVGenerator:
 
     def _apply_variant_options(self, row: Dict[str, object], product: CatalogProduct) -> None:
         variants_cfg = getattr(self.settings, "variants", None)
+        option_mappings = [
+            ("Option1 Name", "Option1 Value", getattr(variants_cfg, "option1", None) if variants_cfg else None),
+            ("Option2 Name", "Option2 Value", getattr(variants_cfg, "option2", None) if variants_cfg else None),
+            ("Option3 Name", "Option3 Value", None),
+        ]
+
         if not variants_cfg or not variants_cfg.enabled:
-            row.setdefault("Option1 Name", "Title")
-            row.setdefault("Option1 Value", "Default Title")
-            row.setdefault("Option2 Name", "")
-            row.setdefault("Option2 Value", "")
+            self._clear_option_fields(row)
             return
 
-        option1_value = self._get_variant_option_value(product, variants_cfg.option1)
-        option2_value = self._get_variant_option_value(product, variants_cfg.option2)
+        variant_axes: List[Tuple[str, str]] = []
+        for name_key, value_key, option_cfg in option_mappings:
+            raw_value = ""
+            axis_name = ""
+            if option_cfg is not None:
+                value = self._get_variant_option_value(product, option_cfg)
+                raw_value = value.strip() if value else ""
+                axis_name = (option_cfg.name or "").strip()
+            if axis_name.lower() == "title":
+                axis_name = ""
 
-        if option1_value:
-            row["Option1 Name"] = variants_cfg.option1.name or "Title"
-            row["Option1 Value"] = option1_value
-        else:
-            row["Option1 Name"] = "Title"
-            row["Option1 Value"] = "Default Title"
+            if raw_value:
+                inferred_name = axis_name or self._infer_option_name_from_value(raw_value)
+                if inferred_name:
+                    row[name_key] = inferred_name
+                    row[value_key] = raw_value
+                    variant_axes.append((name_key, value_key))
+                else:
+                    row[name_key] = ""
+                    row[value_key] = ""
+            else:
+                row[name_key] = ""
+                row[value_key] = ""
 
-        if option2_value:
-            row["Option2 Name"] = variants_cfg.option2.name or ""
-            row["Option2 Value"] = option2_value
-        else:
-            row["Option2 Name"] = ""
-            row["Option2 Value"] = ""
+        if not variant_axes:
+            self._clear_option_fields(row)
+
+
+    @staticmethod
+    def _clear_option_fields(row: Dict[str, object]) -> None:
+        for idx in range(1, 4):
+            row[f"Option{idx} Name"] = ""
+            row[f"Option{idx} Value"] = ""
+
+    def _infer_option_name_from_value(self, value: str) -> str:
+        text = (value or "").strip()
+        if not text:
+            return ""
+        lowered = text.casefold()
+        compact = re.sub(r"[ .-]", "", lowered)
+        if lowered in SIZE_TOKEN_SET or compact in SIZE_COMPACT_SET:
+            return "Tamanho"
+        if lowered.isdigit():
+            try:
+                numeric = int(lowered)
+            except ValueError:
+                numeric = None
+            else:
+                if numeric in SIZE_NUMERIC_RANGE:
+                    return "Tamanho"
+        if self._looks_like_capacity(lowered):
+            return "Capacidade"
+        if lowered in COLOR_TOKEN_SET:
+            return "Cor"
+        return ""
+
+    @staticmethod
+    def _looks_like_capacity(value: str) -> bool:
+        compact = value.replace(" ", "")
+        for unit in CAPACITY_UNITS:
+            if compact.endswith(unit):
+                number = compact[: -len(unit)]
+                number = number.replace(',', '.').strip()
+                if not number:
+                    continue
+                try:
+                    float(number)
+                except ValueError:
+                    continue
+                return True
+        return False
+
 
     def _get_variant_option_value(self, product: CatalogProduct, option_cfg) -> str:
         column = getattr(option_cfg, "column", None)
