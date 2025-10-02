@@ -2,13 +2,124 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence
 
 import pandas as pd
 
+ROOT_DIR = Path(__file__).resolve().parents[1]
+SRC_DIR = ROOT_DIR / "src"
+if SRC_DIR.exists():
+    src_str = str(SRC_DIR)
+    if src_str not in sys.path:
+        sys.path.append(src_str)
+
+from nfe_importer.core.text_splitters import DEFAULT_USAGE_MARKERS
+
 EMPTY_MARKERS = {"", "nan", "none", "null"}
+
+
+COMPOSITION_WARNING_KEYWORDS = (
+    'polirresina',
+)
+MAX_SNIPPET_LEN = 120
+USAGE_WARNING_FIELD = 'Body (HTML)'
+
+
+def get_reports_dir() -> Path:
+    directory = Path('reports') / 'validation'
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def pick_warning_name(csv_path: Path) -> Path:
+    reports_dir = get_reports_dir()
+    try:
+        relative_name = csv_path.resolve().relative_to(Path.cwd().resolve())
+    except ValueError:
+        relative_name = csv_path.name
+    slug = re.sub(r'[^A-Za-z0-9_.-]+', '_', str(relative_name))
+    return reports_dir / f"{slug}_warnings.csv"
+
+
+def extract_snippet(text: str, index: int, marker_length: int) -> str:
+    start = max(0, index - 40)
+    end = min(len(text), index + marker_length + 80)
+    snippet = text[start:end].replace('\r', ' ').replace('\n', ' ').strip()
+    if len(snippet) > MAX_SNIPPET_LEN:
+        snippet = snippet[: MAX_SNIPPET_LEN - 3].rstrip() + '...'
+    return snippet
+
+
+def find_marker_in_text(text: str, markers: Sequence[str]) -> tuple[str | None, int]:
+    lowered = text.casefold()
+    best_idx = -1
+    best_marker: str | None = None
+    for marker in markers:
+        idx = lowered.find(marker)
+        if idx != -1 and (best_idx == -1 or idx < best_idx):
+            best_marker = marker
+            best_idx = idx
+    return best_marker, best_idx
+
+
+def collect_warnings(dataframe: pd.DataFrame, markers: Sequence[str]) -> List[Dict[str, str]]:
+    warnings: List[Dict[str, str]] = []
+    body_col = USAGE_WARNING_FIELD
+    comp_col = 'product.metafields.custom.composicao'
+    if body_col not in dataframe.columns:
+        return warnings
+
+    body_series = dataframe[body_col].fillna('').astype(str)
+    if comp_col in dataframe.columns:
+        composition_series = dataframe[comp_col].fillna('').astype(str)
+    else:
+        composition_series = pd.Series([''] * len(dataframe), index=dataframe.index)
+
+    sku_columns = [col for col in ('Variant SKU', 'SKU', 'Handle') if col in dataframe.columns]
+    composition_keywords = tuple(keyword.casefold() for keyword in COMPOSITION_WARNING_KEYWORDS)
+
+    for idx, body in body_series.items():
+        body_text = str(body).strip()
+        if not body_text:
+            continue
+        sku_value = ''
+        for col in sku_columns:
+            raw = dataframe.at[idx, col]
+            if pd.notna(raw):
+                candidate = str(raw).strip()
+                if candidate:
+                    sku_value = candidate
+                    break
+
+        marker, marker_idx = find_marker_in_text(body_text, markers)
+        if marker and marker_idx != -1:
+            snippet = extract_snippet(body_text, marker_idx, len(marker))
+            warnings.append({
+                'sku': sku_value,
+                'field': body_col,
+                'warning_type': 'usage_in_body',
+                'snippet': snippet,
+            })
+
+        composition_text = composition_series.get(idx, '')
+        composition_lower = str(composition_text).casefold()
+        body_lower = body_text.casefold()
+        for keyword in composition_keywords:
+            idx_kw = body_lower.find(keyword)
+            if idx_kw != -1 and keyword not in composition_lower:
+                snippet = extract_snippet(body_text, idx_kw, len(keyword))
+                warnings.append({
+                    'sku': sku_value,
+                    'field': body_col,
+                    'warning_type': 'composition_mismatch',
+                    'snippet': snippet,
+                })
+                break
+
+    return warnings
 
 
 @dataclass(frozen=True)
@@ -195,8 +306,7 @@ def default_rule(column: str) -> FieldRule:
 
 
 def pick_report_name(csv_path: Path) -> Path:
-    reports_dir = Path("reports") / "validation"
-    reports_dir.mkdir(parents=True, exist_ok=True)
+    reports_dir = get_reports_dir()
     try:
         relative_name = csv_path.resolve().relative_to(Path.cwd().resolve())
     except ValueError:
@@ -309,14 +419,23 @@ def validate_csv(csv_path: Path) -> Dict[str, object]:
 
     report_df = pd.DataFrame(report_rows)
     report_path = pick_report_name(csv_path)
-    report_df.to_csv(report_path, index=False, encoding="utf-8")
+    report_df.to_csv(report_path, index=False, encoding='utf-8')
+
+    warnings_list = collect_warnings(dataframe, DEFAULT_USAGE_MARKERS)
+    warnings_path = None
+    if warnings_list:
+        warnings_df = pd.DataFrame(warnings_list, columns=['sku', 'field', 'warning_type', 'snippet'])
+        warnings_path = pick_warning_name(csv_path)
+        warnings_df.to_csv(warnings_path, index=False, encoding='utf-8')
 
     return {
-        "csv_path": csv_path,
-        "rows": total_rows,
-        "report_path": report_path,
-        "alerts": alerts,
-        "report": report_df,
+        'csv_path': csv_path,
+        'rows': total_rows,
+        'report_path': report_path,
+        'alerts': alerts,
+        'report': report_df,
+        'warnings': warnings_list,
+        'warnings_path': warnings_path,
     }
 
 
@@ -354,7 +473,14 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 print(f"  - {alert}")
         else:
             print("Nenhum problema em campos obrigatorios.")
+        if result['warnings']:
+            print('Warnings:')
+            for warning in result['warnings']:
+                sku = warning.get('sku') or '(sem sku)'
+                print(f"  - {sku}: {warning['warning_type']} -> {warning['snippet']}")
         print(f"Relatorio salvo em: {result['report_path']}")
+        if result['warnings_path']:
+            print(f"Warnings detalhados em: {result['warnings_path']}")
 
 
 if __name__ == "__main__":
