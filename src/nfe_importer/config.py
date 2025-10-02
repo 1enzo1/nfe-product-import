@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import yaml
+
+from .core.text_splitters import DEFAULT_USAGE_MARKERS
 from pydantic import BaseModel, Field, validator
 
 
@@ -190,6 +192,15 @@ class TagsConfig(BaseModel):
         return value
 
 
+class TextSplittingConfig(BaseModel):
+    """Configuration for text splitting heuristics."""
+
+    usage_markers: List[str] = Field(
+        default_factory=lambda: list(DEFAULT_USAGE_MARKERS),
+        description="Markers that indicate usage/limpeza instructions in catalogue text",
+    )
+
+
 class Settings(BaseModel):
     """Top level configuration object."""
 
@@ -207,6 +218,7 @@ class Settings(BaseModel):
     )
     export: ExportConfig = Field(default_factory=ExportConfig)
     tags: TagsConfig = Field(default_factory=TagsConfig)
+    text_splitting: TextSplittingConfig = Field(default_factory=TextSplittingConfig)
 
     class Config:
         arbitrary_types_allowed = True
@@ -242,5 +254,6 @@ __all__ = [
     "WeightsConfig",
     "GoogleDriveConfig",
     "WatchConfig",
+    "TextSplittingConfig",
 ]
 
