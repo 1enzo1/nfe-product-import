@@ -82,3 +82,13 @@ metafields:
     cofins: "cofins"
     componente_de_kit: "componente_de_kit"
     resistencia_a_agua: "resistencia_a_agua"
+  dynamic_mapping:
+    enabled: true
+    map:
+      unidade: "unit"
+      catalogo: "catalogo"
+      dimensoes_do_produto: "medidas_s_emb"
+      capacidade: "capacidade__ml_ou_peso_suportado"
+      ncm: "ncm"
+      ipi: "ipi"
+      modo_de_uso: "features"

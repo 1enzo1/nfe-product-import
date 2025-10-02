@@ -12,18 +12,115 @@ import pandas as pd
 
 from ..config import Settings
 from .models import CatalogProduct, MatchDecision, NFEItem, Suggestion, UnmatchedItem
-from .utils import gtin_is_valid, normalize_barcode, round_money, slugify
+from .utils import clean_multiline_text, gtin_is_valid, normalize_barcode, round_money, slugify
 
 
 LOGGER = logging.getLogger(__name__)
+
+SHOPIFY_HEADER = [
+    "Handle",
+    "Title",
+    "Body (HTML)",
+    "Vendor",
+    "Tags",
+    "Published",
+    "Option1 Name",
+    "Option1 Value",
+    "Option2 Name",
+    "Option2 Value",
+    "Option3 Name",
+    "Option3 Value",
+    "Variant SKU",
+    "Variant Price",
+    "Variant Compare At Price",
+    "Variant Inventory Qty",
+    "Variant Weight",
+    "Variant Weight Unit",
+    "Variant Requires Shipping",
+    "Image Src",
+    "Variant Barcode",
+    "Variant Grams",
+    "Variant Inventory Tracker",
+    "Variant Inventory Policy",
+    "Variant Fulfillment Service",
+    "product.metafields.custom.unidade",
+    "product.metafields.custom.catalogo",
+    "product.metafields.custom.dimensoes_do_produto",
+    "product.metafields.custom.composicao",
+    "product.metafields.custom.capacidade",
+    "product.metafields.custom.modo_de_uso",
+    "product.metafields.custom.icms",
+    "product.metafields.custom.ncm",
+    "product.metafields.custom.pis",
+    "product.metafields.custom.ipi",
+    "product.metafields.custom.cofins",
+    "product.metafields.custom.componente_de_kit",
+    "product.metafields.custom.resistencia_a_agua",
+    "Variant Taxable",
+    "Cost per item",
+    "Image Position",
+    "Variant Image",
+    "Product Category",
+    "Type",
+    "Collection",
+    "Status",
+]
+
+
+REQUIRED_FIELDS = [
+    "Handle",
+    "Title",
+    "Vendor",
+    "Variant SKU",
+    "Variant Price",
+    "Variant Inventory Qty",
+    "Variant Weight",
+    "Variant Weight Unit",
+]
 
 ImageResolver = Callable[[CatalogProduct], Optional[str]]
 
 
 class CSVGenerator:
+    def _validate_header(self) -> None:
+        configured = list(self.settings.csv_output.columns)
+        if configured != SHOPIFY_HEADER:
+            raise ValueError("Configured csv_output.columns does not match the Shopify template header")
+
+
+    def _validate_required_fields(self, dataframe: pd.DataFrame) -> None:
+        if "Handle" not in dataframe.columns:
+            raise ValueError("Generated CSV missing 'Handle' column")
+        handles = dataframe["Handle"].astype(str).str.strip()
+        missing: Dict[str, List[str]] = {}
+
+        def record(field: str, mask) -> None:
+            if mask.any():
+                missing[field] = sorted(set(handles[mask]))
+
+        for field in REQUIRED_FIELDS:
+            if field not in dataframe.columns:
+                missing[field] = sorted(set(handles))
+                continue
+            series = dataframe[field]
+            if field == "Variant Weight":
+                numeric = pd.to_numeric(series, errors="coerce")
+                mask = numeric.isna() | (numeric <= 0)
+            elif field == "Variant Weight Unit":
+                mask = ~series.astype(str).str.strip().str.lower().isin({"g", "kg"})
+            else:
+                mask = series.astype(str).str.strip().str.lower().isin({"", "nan", "none", "null"})
+            record(field, mask)
+
+        if missing:
+            details = '; '.join(f"{field}: {', '.join(values)}" for field, values in missing.items())
+            raise ValueError(f"Missing required fields in generated CSV -> {details}")
+
     def __init__(self, settings: Settings, image_resolver: Optional[ImageResolver] = None) -> None:
         self.settings = settings
+        self._validate_header()
         self.image_resolver = image_resolver or (lambda product: None)
+        self.default_status = "active"
 
     def generate(
         self,
@@ -32,6 +129,7 @@ class CSVGenerator:
         run_id: str,
     ) -> Tuple[Path, Optional[Path], pd.DataFrame, pd.DataFrame]:
         dataframe = self._build_dataframe(matched)
+        self._validate_required_fields(dataframe)
         csv_path = self._write_dataframe(dataframe, run_id)
         pendings_df = self._build_pendings(unmatched)
         pendings_path = self._write_pendings(pendings_df, run_id)
@@ -112,8 +210,7 @@ class CSVGenerator:
             row.setdefault("Option1 Value", "Default Title")
 
             # Inventory tracker/policy/fulfillment
-            if isinstance(inv_qty_int, (int, float)) and float(inv_qty_int) > 0:
-                row["Variant Inventory Tracker"] = "shopify"
+            row["Variant Inventory Tracker"] = "shopify"
             row.setdefault("Variant Inventory Policy", "deny")
             row.setdefault("Variant Fulfillment Service", "manual")
 
@@ -123,7 +220,7 @@ class CSVGenerator:
             # Taxable by default (unless explicitly set elsewhere)
             row.setdefault("Variant Taxable", "TRUE")
 
-            # Tags: include category (product_type) plus existing tags
+            # Tags: include category (product_type) plus existing tags without códigos internos
             product_type = row.get("Product Type") or ""
             tags = []
             if isinstance(row.get("Tags"), str) and row["Tags"].strip():
@@ -132,12 +229,20 @@ class CSVGenerator:
                 tags.insert(0, product_type)
             row["Tags"] = ",".join(self._sanitize_tags(tags))
 
-            # Body (HTML): prefer catalogue features or composition if present
+            # Body (HTML): prefer catalogue description (textos) when available
             if not row.get("Body (HTML)"):
-                features = self._clean_text(row.get("_features") or "")
-                composition = self._clean_text(row.get("composition") or "")
+                description = self._clean_text(row.get("_description") or "")
+                if not description:
+                    description = self._clean_text(row.get("_features") or "")
+                composition_raw = self._clean_text(row.get("composition") or row.get("composicao") or "")
                 inf_ad = self._clean_text(row.get("_infAdProd") or "")
-                parts = [p for p in [features, composition, inf_ad] if p]
+                composition_meta_value = ""
+                composition_key = self.settings.metafields.keys.get("composicao")
+                if composition_key:
+                    meta_column = f"product.metafields.{self.settings.metafields.namespace}.{composition_key}"
+                    composition_meta_value = self._clean_text(row.get(meta_column) or "")
+                composition_body = composition_raw if (composition_raw and not composition_meta_value) else ""
+                parts = [p for p in [description, composition_body, inf_ad] if p]
                 if parts:
                     row["Body (HTML)"] = "\n\n".join(parts)
 
@@ -146,6 +251,7 @@ class CSVGenerator:
 
             # cleanup helper-only fields
             row.pop("_features", None)
+            row.pop("_description", None)
             row.pop("_infAdProd", None)
             row.pop("composition", None)
             row.pop("_status_override", None)
@@ -198,17 +304,40 @@ class CSVGenerator:
         return df
 
     def _base_row(self, product: CatalogProduct) -> Dict[str, object]:
+        collection_value = product.collection or ""
+        if isinstance(collection_value, str):
+            collection_value = collection_value.strip()
+            if collection_value.lower() == "nan":
+                collection_value = ""
+        product_category = None
+        if product.extra:
+            product_category = product.extra.get("product_category")
+        if isinstance(product_category, str):
+            product_category = product_category.strip()
+            if product_category.lower() == "nan":
+                product_category = None
+        if not product_category:
+            product_category = product.product_type or ""
+        product_type_value = product.product_type or ""
+        type_value = ""
+        if product.extra:
+            raw_type = product.extra.get("subcateg")
+            if isinstance(raw_type, str) and raw_type.strip().lower() != "nan":
+                type_value = raw_type.strip()
         row: Dict[str, object] = {
             "Handle": slugify(product.title or product.sku),
             "Title": self._refine_title(product.title),
             "Vendor": product.vendor or self.settings.default_vendor or "",
-            "Product Type": product.product_type or "",
+            "Product Type": product_type_value,
             "SKU": product.sku,
             "Barcode": self._valid_barcode(product.barcode),
             "Status": self._default_status(),
             "Published": "TRUE",
             # Tags are finalised after aggregation to include category
             "Tags": ",".join(product.tags) if product.tags else "",
+            "Collection": (collection_value or product_type_value or ""),
+            "Product Category": product_category,
+            "Type": type_value,
             "Compare At Price": "",
             "Weight": product.weight or "",
             "Image Src": self.image_resolver(product) or "",
@@ -244,13 +373,63 @@ class CSVGenerator:
 
     @staticmethod
     def _clean_text(value: Optional[str]) -> str:
-        if not value:
+        return clean_multiline_text(value)
+
+    @staticmethod
+    def _normalise_dynamic_value(value: object) -> str:
+        if value is None:
             return ""
-        s = str(value).replace("_x000D_", " ")
-        s = s.replace("\r\n", "\n").replace("\r", "\n")
-        # collapse consecutive whitespace but keep single newlines
-        parts = [" ".join(line.split()).strip() for line in s.split("\n")]
-        return "\n".join([p for p in parts if p])
+        if isinstance(value, str):
+            return clean_multiline_text(value)
+        if isinstance(value, (int, float)):
+            if isinstance(value, float) and pd.isna(value):
+                return ""
+            return CSVGenerator._format_number(float(value))
+        return str(value).strip()
+
+    @staticmethod
+    def _format_number(value: float, max_decimals: int = 3) -> str:
+        formatted = f"{value:.{max_decimals}f}"
+        if "." in formatted:
+            formatted = formatted.rstrip("0").rstrip(".")
+        return formatted or "0"
+
+    def _parse_weight(self, value: object, unit_hint: Optional[str]) -> Optional[float]:
+        if value is None:
+            return None
+        unit = (unit_hint or "").strip().lower()
+        numeric: Optional[float]
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+            lower = text.lower()
+            if lower.endswith("kg"):
+                unit = unit or "kg"
+                text = lower[:-2]
+            elif lower.endswith("g"):
+                unit = unit or "g"
+                text = lower[:-1]
+            text = re.sub(r"[^0-9,.-]", "", text)
+            if not text:
+                return None
+            text = text.replace(",", ".")
+            try:
+                numeric = float(text)
+            except ValueError:
+                return None
+        elif isinstance(value, (int, float)):
+            if isinstance(value, float) and pd.isna(value):
+                return None
+            numeric = float(value)
+        else:
+            return None
+        if numeric <= 0:
+            return None
+        if unit in {"g", "grama", "gramas"}:
+            return numeric / 1000.0
+        return numeric
+
 
     def _default_status(self) -> str:
         export_cfg = getattr(self.settings, "export", None)
@@ -512,20 +691,56 @@ class CSVGenerator:
             if logical == "cfop":
                 value = ";".join(sorted(cfops))
             elif logical == "ncm":
-                value = ";".join(sorted(ncms))
+                value = ";".join(sorted(ncms)) or row.get(logical, "")
             elif logical == "cest":
-                value = ";".join(sorted(cests))
+                value = ";".join(sorted(cests)) or row.get(logical, "")
             elif logical == "unidade":
-                value = ";".join(sorted(units))
+                value = row.get(logical) or ";".join(sorted(units))
             elif logical == "composicao":
-                value = row.get("composition") or ""
+                value = row.get(logical) or row.get("composition") or ""
             else:
                 value = row.get(logical, "")
+            if isinstance(value, str):
+                value = self._clean_text(value)
             row[column] = value
 
     def _metafield_columns(self) -> List[str]:
         namespace = self.settings.metafields.namespace
         return [f"product.metafields.{namespace}.{key}" for key in self.settings.metafields.keys.values()]
+
+    def _build_tags(self, raw_tags: object, product_type: str) -> str:
+        tags: List[str] = []
+        seen = set()
+        if isinstance(raw_tags, str):
+            for candidate in raw_tags.split(','):
+                tag = candidate.strip()
+                if not tag:
+                    continue
+                normalized = tag.casefold()
+                if normalized in {"nan", "none", "null"}:
+                    continue
+                if self._tag_looks_like_internal_code(tag):
+                    continue
+                if normalized not in seen:
+                    tags.append(tag)
+                    seen.add(normalized)
+        if product_type:
+            pt = product_type.strip()
+            if pt:
+                normalized_pt = pt.casefold()
+                if normalized_pt not in seen:
+                    tags.insert(0, pt)
+                    seen.add(normalized_pt)
+        return ','.join(tags)
+
+    @staticmethod
+    def _tag_looks_like_internal_code(tag: str) -> bool:
+        candidate = tag.strip()
+        if not candidate:
+            return True
+        if re.fullmatch(r'\dT\d{2}', candidate, flags=re.IGNORECASE):
+            return True
+        return False
 
     def _build_pendings(self, unmatched: Iterable[UnmatchedItem]) -> pd.DataFrame:
         records = []
@@ -586,5 +801,9 @@ class CSVGenerator:
         return ""
 
 
-__all__ = ["CSVGenerator"]
+__all__ = ["CSVGenerator", "SHOPIFY_HEADER"]
+
+
+
+
 

@@ -11,7 +11,7 @@ import pandas as pd
 from lxml import etree
 
 from .models import CatalogProduct, InvoiceInfo, NFEItem
-from .utils import normalize_barcode, normalize_sku, safe_float
+from .utils import clean_multiline_text, normalize_barcode, normalize_sku, safe_float
 
 
 LOGGER = logging.getLogger(__name__)
@@ -199,6 +199,8 @@ class CatalogLoader:
             vendor = str(data.get("vendor") or "").strip() or None
             product_type = str(data.get("product_type") or "").strip() or None
             collection = str(data.get("collection") or "").strip() or None
+            if isinstance(collection, str) and collection.lower() == "nan":
+                collection = None
             unit = str(data.get("unit") or "").strip() or None
             ncm = str(data.get("ncm") or "").strip() or None
             cest = str(data.get("cest") or "").strip() or None
@@ -211,20 +213,49 @@ class CatalogLoader:
             tags: List[str] = []
             raw_tags = data.get("tags")
             if isinstance(raw_tags, str):
-                tags = [tag.strip() for tag in raw_tags.split(",") if tag.strip()]
+                cleaned_tags = clean_multiline_text(raw_tags)
+                tags = [tag.strip() for tag in cleaned_tags.replace("\n", ",").split(",") if tag.strip()]
 
             metafields = {}
             composition_value = data.get("composition")
-            if isinstance(composition_value, str) and composition_value.strip():
-                metafields["composition"] = composition_value.strip()
+            if isinstance(composition_value, str):
+                cleaned_composition = clean_multiline_text(composition_value)
+                if cleaned_composition:
+                    metafields["composition"] = cleaned_composition
 
+            skip_extra_keys = {
+                "sku",
+                "title",
+                "barcode",
+                "vendor",
+                "product_type",
+                "collection",
+                "unit",
+                "ncm",
+                "cest",
+                "weight",
+                "tags",
+                "composition",
+            }
             extra = {}
-            features_value = data.get("features")
-            if isinstance(features_value, str) and features_value.strip():
-                extra["features"] = features_value.strip()
-            price_value = data.get("price")
-            if isinstance(price_value, (int, float)):
-                extra["price"] = float(price_value)
+            for key, value in data.items():
+                if key in skip_extra_keys:
+                    continue
+                if key == "price":
+                    if isinstance(value, (int, float)):
+                        extra["price"] = float(value)
+                    continue
+                if value is None:
+                    continue
+                if isinstance(value, float) and pd.isna(value):
+                    continue
+                if isinstance(value, str):
+                    cleaned_value = clean_multiline_text(value)
+                    if not cleaned_value:
+                        continue
+                    extra[key] = cleaned_value
+                    continue
+                extra[key] = value
 
             reserved_keys = {
                 "sku",
@@ -280,4 +311,8 @@ class CatalogLoader:
 
 
 __all__ = ["NFEParser", "CatalogLoader"]
+
+
+
+
 

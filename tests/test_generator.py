@@ -13,6 +13,7 @@ from nfe_importer.config import (
 )
 from nfe_importer.core.generator import CSVGenerator
 from nfe_importer.core.models import CatalogProduct, MatchDecision, NFEItem
+from nfe_importer.core.parser import CatalogLoader
 
 
 def build_settings(
@@ -124,6 +125,7 @@ def make_decision() -> MatchDecision:
         cest="",
         weight=0.4,
         metafields={"composition": "70% METAL"},
+        extra={"features": "Detalhes decorativos", "textos": "Descricao detalhada do produto"},
     )
     item = NFEItem(
         invoice_key="TEST",

@@ -8,7 +8,9 @@ Notes for Streamlit Cloud deployment:
 
 from __future__ import annotations
 
-import argparse\r\nfrom dataclasses import dataclass\r\nfrom pathlib import Path
+import argparse
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, TYPE_CHECKING
 
 import pandas as pd
@@ -243,6 +245,7 @@ def main() -> None:
 
     st.sidebar.header("Nova execucao")
     st.sidebar.caption(f"Config: {selected_version.config_path}")
+    importar_draft = st.sidebar.checkbox("Importar NFE como rascunho para Shopify", value=True)
     uploaded_files = st.sidebar.file_uploader("Carregar NF-e (XML)", type="xml", accept_multiple_files=True)
     current_user = st.sidebar.text_input("Usuario", value=st.session_state.get("current_user", ""))
     st.session_state["current_user"] = current_user
@@ -252,6 +255,7 @@ def main() -> None:
         st.sidebar.success(f"{len(saved_paths)} arquivo(s) carregado(s).")
 
     if st.sidebar.button("Processar agora"):
+        processor.generator.default_status = "draft" if importar_draft else "active"
         with st.spinner("Processando arquivos..."):
             result = processor.process_directory(mode=f"ui:{selected_version.key}", user=current_user)
         if result is None:
@@ -278,3 +282,6 @@ def main() -> None:
         show_pending_items(processor, run)
 
     show_catalog_search(processor)
+if __name__ == "__main__":
+    # Permite executar via `streamlit run src/nfe_importer/ui/dashboard.py`
+    main()

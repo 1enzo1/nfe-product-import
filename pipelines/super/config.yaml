@@ -1,4 +1,4 @@
-﻿paths:
+paths:
   nfe_input_folder: "data/"
   master_data_file: "example_docs/MART-Ficha-tecnica-Biblioteca-Virtual-08-08-2025.xlsx"
   output_folder: "output/super/"
@@ -85,10 +85,13 @@ metafields:
   dynamic_mapping:
     enabled: true
     map:
-      dimensoes_do_produto: "dimensoes"
-      modo_de_uso: "modo_de_uso"
-      capacidade: "capacidade"
+      unidade: "unit"
       catalogo: "catalogo"
+      dimensoes_do_produto: "medidas_s_emb"
+      capacidade: "capacidade__ml_ou_peso_suportado"
+      ncm: "ncm"
+      ipi: "ipi"
+      modo_de_uso: "features"
 
 variants:
   enabled: true
@@ -104,3 +107,5 @@ weights:
   column: "peso"
   unit_column: "un_peso"
   default_unit: "kg"
+
+
