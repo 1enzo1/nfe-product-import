@@ -1,0 +1,139 @@
+{
+  "runs": [
+    {
+      "run_id": "20251005T174214",
+      "generated_at": "2025-10-05T17:42:14.537549",
+      "total_rows": 128,
+      "fields": {
+        "product.metafields.custom.ncm": {
+          "logical": "ncm",
+          "non_empty": 128,
+          "total": 128
+        },
+        "product.metafields.custom.unidade": {
+          "logical": "unidade",
+          "non_empty": 128,
+          "total": 128
+        },
+        "product.metafields.custom.capacidade": {
+          "logical": "capacidade",
+          "non_empty": 0,
+          "total": 128
+        },
+        "product.metafields.custom.dimensoes_do_produto": {
+          "logical": "dimensoes_do_produto",
+          "non_empty": 128,
+          "total": 128
+        }
+      }
+    },
+    {
+      "run_id": "20251005T032215",
+      "generated_at": "2025-10-05T03:22:15.608376",
+      "total_rows": 128,
+      "fields": {
+        "product.metafields.custom.ncm": {
+          "logical": "ncm",
+          "non_empty": 128,
+          "total": 128
+        },
+        "product.metafields.custom.unidade": {
+          "logical": "unidade",
+          "non_empty": 128,
+          "total": 128
+        },
+        "product.metafields.custom.capacidade": {
+          "logical": "capacidade",
+          "non_empty": 0,
+          "total": 128
+        },
+        "product.metafields.custom.dimensoes_do_produto": {
+          "logical": "dimensoes_do_produto",
+          "non_empty": 128,
+          "total": 128
+        }
+      }
+    },
+    {
+      "run_id": "20251005T031400",
+      "generated_at": "2025-10-05T03:14:00.387592",
+      "total_rows": 128,
+      "fields": {
+        "product.metafields.custom.ncm": {
+          "logical": "ncm",
+          "non_empty": 128,
+          "total": 128
+        },
+        "product.metafields.custom.unidade": {
+          "logical": "unidade",
+          "non_empty": 128,
+          "total": 128
+        },
+        "product.metafields.custom.capacidade": {
+          "logical": "capacidade",
+          "non_empty": 0,
+          "total": 128
+        },
+        "product.metafields.custom.dimensoes_do_produto": {
+          "logical": "dimensoes_do_produto",
+          "non_empty": 128,
+          "total": 128
+        }
+      }
+    },
+    {
+      "run_id": "20251005T030121",
+      "generated_at": "2025-10-05T03:01:21.134403",
+      "total_rows": 128,
+      "fields": {
+        "product.metafields.custom.ncm": {
+          "logical": "ncm",
+          "non_empty": 128,
+          "total": 128
+        },
+        "product.metafields.custom.unidade": {
+          "logical": "unidade",
+          "non_empty": 128,
+          "total": 128
+        },
+        "product.metafields.custom.capacidade": {
+          "logical": "capacidade",
+          "non_empty": 0,
+          "total": 128
+        },
+        "product.metafields.custom.dimensoes_do_produto": {
+          "logical": "dimensoes_do_produto",
+          "non_empty": 128,
+          "total": 128
+        }
+      }
+    },
+    {
+      "run_id": "20251005T024412",
+      "generated_at": "2025-10-05T02:44:12.186188",
+      "total_rows": 128,
+      "fields": {
+        "product.metafields.custom.ncm": {
+          "logical": "ncm",
+          "non_empty": 128,
+          "total": 128
+        },
+        "product.metafields.custom.unidade": {
+          "logical": "unidade",
+          "non_empty": 128,
+          "total": 128
+        },
+        "product.metafields.custom.capacidade": {
+          "logical": "capacidade",
+          "non_empty": 0,
+          "total": 128
+        },
+        "product.metafields.custom.dimensoes_do_produto": {
+          "logical": "dimensoes_do_produto",
+          "non_empty": 128,
+          "total": 128
+        }
+      }
+    }
+  ]
+}

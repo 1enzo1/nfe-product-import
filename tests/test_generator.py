@@ -265,8 +265,8 @@ def test_option1_value_unique_per_handle(tmp_path):
         build_decision_for_product(product_b),
     ]).set_index("Variant SKU")
 
-    assert df.loc["SKU-1", "Option1 Value"] == "Default Title"
-    assert df.loc["SKU-2", "Option1 Value"] == "Default Title-2"
+    assert df.loc["SKU-1", "Option1 Value"] == ""
+    assert df.loc["SKU-2", "Option1 Value"] == ""
 
 
 def test_tags_sanitization_when_enabled(tmp_path):

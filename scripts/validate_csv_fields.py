@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import re
@@ -16,7 +16,15 @@ if SRC_DIR.exists():
     if src_str not in sys.path:
         sys.path.append(src_str)
 
-from nfe_importer.core.text_splitters import DEFAULT_USAGE_MARKERS
+from nfe_importer.core.generator import (
+    CAPACITY_PATTERN,
+    COLOR_TOKEN_SET,
+    SIZE_NUMERIC_RANGE,
+    SIZE_TOKEN_CHOICES,
+    SIZE_TOKEN_PATTERN,
+    WEIGHT_PATTERN,
+)
+from nfe_importer.core.text_splitters import DEFAULT_USAGE_MARKERS, normalise_markers, usage_score
 
 EMPTY_MARKERS = {"", "nan", "none", "null"}
 
@@ -67,8 +75,45 @@ def find_marker_in_text(text: str, markers: Sequence[str]) -> tuple[str | None, 
 
 
 
+
+
+def classify_option_value(value: str) -> str:
+    if not value:
+        return ''
+    text = str(value).strip()
+    if not text:
+        return ''
+    upper = text.upper()
+    if upper in SIZE_TOKEN_CHOICES:
+        return 'size'
+    token_match = SIZE_TOKEN_PATTERN.search(text)
+    if token_match:
+        token = token_match.group(1).upper()
+        if token in SIZE_TOKEN_CHOICES:
+            return 'size'
+    if text.isdigit() and len(text) == 2:
+        try:
+            numeric = int(text)
+        except ValueError:
+            numeric = None
+        if numeric in SIZE_NUMERIC_RANGE:
+            return 'size'
+    capacity_match = CAPACITY_PATTERN.search(text)
+    if capacity_match:
+        return 'capacity'
+    weight_match = WEIGHT_PATTERN.search(text)
+    if weight_match:
+        return 'weight'
+    lowered = text.casefold()
+    for color in COLOR_TOKEN_SET:
+        if color in lowered:
+            return 'color'
+    return 'other'
+
+
 def collect_warnings(dataframe: pd.DataFrame, markers: Sequence[str]) -> List[Dict[str, str]]:
     warnings: List[Dict[str, str]] = []
+    markers = normalise_markers(markers)
     body_col = USAGE_WARNING_FIELD
     comp_col = 'product.metafields.custom.composicao'
     modo_col = 'product.metafields.custom.modo_de_uso'
@@ -91,12 +136,30 @@ def collect_warnings(dataframe: pd.DataFrame, markers: Sequence[str]) -> List[Di
                     return candidate
         return ''
 
+    handle_info: Dict[str, Dict[str, object]] = {}
+
     for idx in index:
         sku_value = resolve_sku(idx)
         body_text = body_series.get(idx, '').strip()
         modo_text = modo_series.get(idx, '').strip()
         composition_text = composition_series.get(idx, '').strip()
         composition_lower = composition_text.casefold()
+        handle = ''
+        if 'Handle' in dataframe.columns:
+            raw_handle = dataframe.at[idx, 'Handle']
+            if pd.notna(raw_handle):
+                handle = str(raw_handle).strip()
+
+        info = handle_info.setdefault(handle, {
+            'count': 0,
+            'names': set(),
+            'names_display': set(),
+            'values': [],
+            'skus': []
+        })
+        info['count'] += 1
+        if sku_value and sku_value not in info['skus']:
+            info['skus'].append(sku_value)
 
         # enforce empty taxonomy fields (must remain blank)
         taxonomy_non_empty = False
@@ -110,6 +173,7 @@ def collect_warnings(dataframe: pd.DataFrame, markers: Sequence[str]) -> List[Di
         if taxonomy_non_empty:
             warnings.append({
                 'sku': sku_value,
+                'handle': handle,
                 'field': 'Product Category/Type/Collection',
                 'warning_type': 'empty_enforced',
                 'snippet': 'must be empty',
@@ -129,22 +193,51 @@ def collect_warnings(dataframe: pd.DataFrame, markers: Sequence[str]) -> List[Di
                 raw = dataframe.at[idx, value_key]
                 if pd.notna(raw):
                     value = str(raw).strip()
+            if option == 1:
+                if name:
+                    info['names'].add(name.casefold())
+                    info['names_display'].add(name)
+                if value:
+                    info['values'].append(value)
             if value and not name:
                 warnings.append({
                     'sku': sku_value,
+                    'handle': handle,
                     'field': f'Option{option}',
                     'warning_type': 'option_consistency',
-                    'snippet': 'value-without-name',
+                    'snippet': 'missing_name',
                 })
             elif name and not value:
                 warnings.append({
                     'sku': sku_value,
+                    'handle': handle,
                     'field': f'Option{option}',
                     'warning_type': 'option_consistency',
-                    'snippet': 'name-without-value',
+                    'snippet': 'missing_value',
+                })
+            elif value.casefold() == 'default title':
+                warnings.append({
+                    'sku': sku_value,
+                    'handle': handle,
+                    'field': f'Option{option}',
+                    'warning_type': 'option_consistency',
+                    'snippet': 'default_title',
                 })
 
         if not body_text:
+            if modo_text:
+                modo_score = usage_score(modo_text, markers)
+                if modo_score <= 1:
+                    snippet = modo_text
+                    if len(snippet) > MAX_SNIPPET_LEN:
+                        snippet = snippet[: MAX_SNIPPET_LEN - 3].rstrip() + '...'
+                    warnings.append({
+                        'sku': sku_value,
+                        'handle': handle,
+                        'field': modo_col,
+                        'warning_type': 'desc_missing_but_usage_weak',
+                        'snippet': snippet,
+                    })
             continue
 
         marker, marker_idx = find_marker_in_text(body_text, markers)
@@ -152,6 +245,7 @@ def collect_warnings(dataframe: pd.DataFrame, markers: Sequence[str]) -> List[Di
             snippet = extract_snippet(body_text, marker_idx, len(marker))
             warnings.append({
                 'sku': sku_value,
+                'handle': handle,
                 'field': body_col,
                 'warning_type': 'usage_in_body',
                 'snippet': snippet,
@@ -164,6 +258,7 @@ def collect_warnings(dataframe: pd.DataFrame, markers: Sequence[str]) -> List[Di
                 snippet = extract_snippet(body_text, idx_kw, len(keyword))
                 warnings.append({
                     'sku': sku_value,
+                    'handle': handle,
                     'field': body_col,
                     'warning_type': 'composition_mismatch',
                     'snippet': snippet,
@@ -175,6 +270,7 @@ def collect_warnings(dataframe: pd.DataFrame, markers: Sequence[str]) -> List[Di
             snippet = extract_snippet(body_text, 0, len(body_text))
             warnings.append({
                 'sku': sku_value,
+                'handle': handle,
                 'field': body_col,
                 'warning_type': 'body_source',
                 'snippet': 'body-too-short: ' + snippet,
@@ -183,12 +279,42 @@ def collect_warnings(dataframe: pd.DataFrame, markers: Sequence[str]) -> List[Di
             snippet = extract_snippet(body_text, 0, len(body_text))
             warnings.append({
                 'sku': sku_value,
+                'handle': handle,
                 'field': body_col,
                 'warning_type': 'body_source',
                 'snippet': 'same-as-modo-de-uso: ' + snippet,
             })
 
+    for handle, info in handle_info.items():
+        if not handle or info.get('count', 0) <= 1:
+            continue
+        normalized_names = {name for name in info['names'] if name}
+        if len(normalized_names) > 1:
+            names_display = sorted({name for name in info['names_display'] if name})
+            warnings.append({
+                'sku': info['skus'][0] if info['skus'] else '',
+                'handle': handle,
+                'field': 'Option1',
+                'warning_type': 'option_axis_mixed',
+                'snippet': ', '.join(names_display) or 'mixed axis',
+            })
+        values = [val for val in info['values'] if val]
+        if len(values) > 1:
+            classes = [classify_option_value(val) for val in values]
+            primary = {cls for cls in classes if cls not in {'', 'other'}}
+            mixed_types = len(primary) > 1
+            has_other_with_primary = 'other' in classes and primary
+            if mixed_types or has_other_with_primary:
+                warnings.append({
+                    'sku': info['skus'][0] if info['skus'] else '',
+                    'handle': handle,
+                    'field': 'Option1',
+                    'warning_type': 'option_value_incoherent',
+                    'snippet': ', '.join(sorted(set(values))),
+                })
+
     return warnings
+
 
 
 
@@ -494,7 +620,7 @@ def validate_csv(csv_path: Path) -> Dict[str, object]:
     warnings_list = collect_warnings(dataframe, DEFAULT_USAGE_MARKERS)
     warnings_path = None
     if warnings_list:
-        warnings_df = pd.DataFrame(warnings_list, columns=['sku', 'field', 'warning_type', 'snippet'])
+        warnings_df = pd.DataFrame(warnings_list, columns=['sku', 'handle', 'field', 'warning_type', 'snippet'])
         warnings_path = pick_warning_name(csv_path)
         warnings_df.to_csv(warnings_path, index=False, encoding='utf-8')
 
@@ -547,7 +673,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             print('Warnings:')
             for warning in result['warnings']:
                 sku = warning.get('sku') or '(sem sku)'
-                print(f"  - {sku}: {warning['warning_type']} -> {warning['snippet']}")
+                handle = warning.get('handle') or '(sem handle)'
+                print(f"  - {sku} [{handle}]: {warning['warning_type']} -> {warning['snippet']}")
         print(f"Relatorio salvo em: {result['report_path']}")
         if result['warnings_path']:
             print(f"Warnings detalhados em: {result['warnings_path']}")

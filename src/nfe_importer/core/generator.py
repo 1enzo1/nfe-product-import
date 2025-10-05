@@ -6,14 +6,21 @@ import logging
 import re
 import unicodedata
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
 from ..config import Settings
 from .models import CatalogProduct, MatchDecision, NFEItem, Suggestion, UnmatchedItem
 from .utils import clean_multiline_text, gtin_is_valid, normalize_barcode, round_money, slugify
-from .text_splitters import split_usage_from_text
+from .text_splitters import (
+    DEFAULT_USAGE_MARKERS,
+    USAGE_STRONG_LABELS,
+    normalise_markers,
+    split_usage_from_text,
+    starts_with_strong_label,
+    usage_score,
+)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -27,6 +34,18 @@ COLOR_TOKEN_SET = {
     'preto', 'branco', 'azul', 'verde', 'vermelho', 'amarelo', 'rosa', 'roxo', 'prata', 'dourado', 'marrom', 'cinza', 'bege', 'cobre', 'grafite', 'laranja', 'marfim', 'vinho', 'lilas', 'turquesa', 'off white', 'off-white', 'branco gelo', 'branco neve', 'chumbo', 'preto fosco', 'preto brilho',
 }
 CAPACITY_UNITS = ('ml', 'l', 'litro', 'litros', 'g', 'kg')
+
+SIZE_TOKEN_CHOICES = tuple(sorted({token.upper() for token in SIZE_TOKEN_SET}, key=len, reverse=True))
+SIZE_TOKEN_PATTERN = re.compile(r'(?:^|[-_\s])(' + '|'.join(SIZE_TOKEN_CHOICES) + r')(?:$|[-_\s])', re.IGNORECASE)
+SIZE_NUMERIC_PATTERN = re.compile(r'(?:^|[-_\s])(\d{2})(?:$|[-_\s])')
+CAPACITY_PATTERN = re.compile(r'(\d+(?:[.,]\d+)?)\s*(ml|l|litros?)', re.IGNORECASE)
+WEIGHT_PATTERN = re.compile(r'(\d+(?:[.,]\d+)?)\s*(g|kg)', re.IGNORECASE)
+BODY_USAGE_PREFIXES = (
+    'limpe o produto',
+    'use um pano',
+    'manter o produto',
+)
+
 
 SHOPIFY_HEADER = [
     "Handle",
@@ -215,10 +234,15 @@ class CSVGenerator:
 
             self._fill_metafields(row, cfops=cfops, ncms=ncms, cests=cests, units=units)
 
+
             # Shopify Variant template defaults and mapping
-            # Option handling: single-variant default
-            row.setdefault("Option1 Name", "Title")
-            row.setdefault("Option1 Value", "Default Title")
+            # Options start empty; inference happens after aggregation
+            row.setdefault("Option1 Name", "")
+            row.setdefault("Option1 Value", "")
+            row.setdefault("Option2 Name", "")
+            row.setdefault("Option2 Value", "")
+            row.setdefault("Option3 Name", "")
+            row.setdefault("Option3 Value", "")
 
             # Inventory tracker/policy/fulfillment
             row["Variant Inventory Tracker"] = "shopify"
@@ -302,6 +326,7 @@ class CSVGenerator:
         # Robust reindex to avoid KeyError even when some columns are missing
         dataframe = dataframe.reindex(columns=expected_columns, fill_value="")
         df = dataframe.fillna("")
+        df = self._apply_option_axes(df)
 
         # Ensure Option1 values are unique per Handle when multiple rows exist.
         if "Handle" in df.columns and "Option1 Value" in df.columns:
@@ -310,9 +335,12 @@ class CSVGenerator:
                     continue
                 seen_counts: Dict[str, int] = {}
                 for idx, val in grp["Option1 Value"].items():
-                    base = val or "Default Title"
-                    n = seen_counts.get(base, 0) + 1
-                    seen_counts[base] = n
+                    base = str(val).strip() if val is not None else ""
+                    if not base:
+                        continue
+                    key = base.casefold()
+                    n = seen_counts.get(key, 0) + 1
+                    seen_counts[key] = n
                     new_val = base if n == 1 else f"{base}-{n}"
                     df.at[idx, "Option1 Value"] = new_val
 
@@ -528,7 +556,39 @@ class CSVGenerator:
             composition_value = row.get("composition", "")
         if composition_value:
             body = self._remove_composition(body, composition_value)
+        if body:
+            body = self._strip_usage_prefix_paragraphs(body)
         return body
+
+
+    def _strip_usage_prefix_paragraphs(self, body: str) -> str:
+        markers = normalise_markers(DEFAULT_USAGE_MARKERS)
+        segments = [segment.strip() for segment in re.split(r"\n{2,}", body) if segment.strip()]
+        if not segments:
+            return ""
+
+        cleaned: List[str] = []
+        for segment in segments:
+            lowered = segment.casefold()
+            prefix_match = self._starts_with_usage_prefix(lowered)
+            score = usage_score(segment, markers)
+            if prefix_match:
+                score += 1
+            if (
+                prefix_match
+                and len(segment) <= 240
+                and score >= 2
+                and not starts_with_strong_label(segment, USAGE_STRONG_LABELS)
+            ):
+                continue
+            cleaned.append(segment)
+
+        return "\n\n".join(cleaned)
+
+    @staticmethod
+    def _starts_with_usage_prefix(text: str) -> bool:
+        stripped = text.lstrip()
+        return any(stripped.startswith(prefix) for prefix in BODY_USAGE_PREFIXES)
 
     def _remove_composition(self, body: str, composition: str) -> str:
         comp_clean = self._clean_text(composition)
@@ -782,6 +842,161 @@ class CSVGenerator:
         namespace = self.settings.metafields.namespace
         return [f"product.metafields.{namespace}.{key}" for key in self.settings.metafields.keys.values()]
 
+
+    def _apply_option_axes(self, df: pd.DataFrame) -> pd.DataFrame:
+        if "Handle" not in df.columns or "Option1 Name" not in df.columns or "Option1 Value" not in df.columns:
+            return df
+
+        option_columns = [
+            "Option1 Name",
+            "Option1 Value",
+            "Option2 Name",
+            "Option2 Value",
+            "Option3 Name",
+            "Option3 Value",
+        ]
+        for column in option_columns:
+            if column not in df.columns:
+                df[column] = ""
+        df[option_columns] = ""
+
+        for handle, group in df.groupby("Handle", sort=False):
+            axis, values = self._infer_option_axis(handle, group)
+            if axis and values:
+                df.loc[group.index, "Option1 Name"] = axis
+                for idx, value in zip(group.index, values):
+                    df.at[idx, "Option1 Value"] = value
+            elif len(group) > 1 and handle:
+                LOGGER.info("Option axis not inferred for handle %s; leaving options blank", handle)
+
+        if "Option1 Value" in df.columns:
+            option_series = df["Option1 Value"].fillna("")
+            mask_default = option_series.str.casefold() == "default title"
+            if mask_default.any():
+                df.loc[mask_default, "Option1 Value"] = ""
+
+        return df
+
+
+    def _infer_option_axis(self, handle: str, group: pd.DataFrame) -> Tuple[Optional[str], List[str]]:
+        if len(group) <= 1:
+            return None, []
+
+        detectors = [
+            ("Tamanho", self._extract_size_option),
+            ("Capacidade", self._extract_capacity_option),
+            ("Peso", self._extract_weight_option),
+            ("Cor", self._extract_color_option),
+        ]
+
+        for axis_name, extractor in detectors:
+            values: List[str] = []
+            failed = False
+            for _, row in group.iterrows():
+                value = extractor(row)
+                if not value:
+                    failed = True
+                    break
+                values.append(value)
+            if failed or not values:
+                continue
+            normalized = {value.casefold() for value in values}
+            if len(normalized) <= 1:
+                continue
+            return axis_name, values
+
+        return None, []
+
+
+    @staticmethod
+    def _option_candidate_strings(row: pd.Series) -> Sequence[str]:
+        candidates: List[str] = []
+        for key in ("Variant SKU", "SKU", "Title"):
+            value = row.get(key)
+            if value is None:
+                continue
+            if isinstance(value, str):
+                text = value.strip()
+            else:
+                if pd.isna(value):
+                    continue
+                text = str(value).strip()
+            if not text or text.casefold() == "nan":
+                continue
+            candidates.append(text)
+        return candidates
+
+
+    def _extract_size_option(self, row: pd.Series) -> Optional[str]:
+        for text in self._option_candidate_strings(row):
+            match = SIZE_TOKEN_PATTERN.search(text)
+            if match:
+                token = match.group(1).upper()
+                if token in SIZE_TOKEN_CHOICES:
+                    return token
+            numeric_match = SIZE_NUMERIC_PATTERN.search(text)
+            if numeric_match:
+                number = numeric_match.group(1)
+                try:
+                    numeric_value = int(number)
+                except ValueError:
+                    continue
+                if numeric_value in SIZE_NUMERIC_RANGE:
+                    return number
+        return None
+
+
+    def _extract_capacity_option(self, row: pd.Series) -> Optional[str]:
+        for text in self._option_candidate_strings(row):
+            match = CAPACITY_PATTERN.search(text)
+            if not match:
+                continue
+            raw_number = match.group(1).replace(',', '.')
+            unit = match.group(2).casefold()
+            try:
+                number = float(raw_number)
+            except ValueError:
+                continue
+            formatted = self._format_number(number, max_decimals=3)
+            if unit.startswith('ml'):
+                return f"{formatted} ml"
+            if unit.startswith('l'):
+                return f"{formatted} L"
+        return None
+
+
+    def _extract_weight_option(self, row: pd.Series) -> Optional[str]:
+        for text in self._option_candidate_strings(row):
+            match = WEIGHT_PATTERN.search(text)
+            if not match:
+                continue
+            raw_number = match.group(1).replace(',', '.')
+            unit = match.group(2).casefold()
+            try:
+                number = float(raw_number)
+            except ValueError:
+                continue
+            formatted = self._format_number(number, max_decimals=3)
+            if unit == 'g':
+                return f"{formatted} g"
+            if unit == 'kg':
+                return f"{formatted} kg"
+        return None
+
+
+    def _extract_color_option(self, row: pd.Series) -> Optional[str]:
+        title = str(row.get("Title") or "").strip()
+        if not title:
+            return None
+        lowered = title.casefold()
+        matches = [color for color in COLOR_TOKEN_SET if color in lowered]
+        if not matches:
+            return None
+        matches.sort(key=len, reverse=True)
+        label = matches[0]
+        return label.title()
+
+
     def _apply_catalog_details(self, row: Dict[str, object], product: CatalogProduct) -> None:
         extra = product.extra or {}
         text_settings = getattr(self.settings, "text_splitting", None)
@@ -796,17 +1011,54 @@ class CSVGenerator:
         desc_cat, uso_cat = split_usage_from_text(catalog_text, markers_override)
         desc_feat, uso_feat = split_usage_from_text(features_text, markers_override)
 
-        desc_parts = [part.strip() for part in (desc_cat, desc_feat) if part and part.strip()]
+        markers_for_scoring = normalise_markers(markers_override or DEFAULT_USAGE_MARKERS)
+
+        catalog_has_text = bool(catalog_text and catalog_text.strip())
+        desc_cat_clean = desc_cat.strip() if desc_cat and desc_cat.strip() else ""
+        desc_feat_clean = desc_feat.strip() if desc_feat and desc_feat.strip() else ""
+
+        desc_parts: List[str] = []
+        if desc_cat_clean:
+            desc_parts.append(desc_cat_clean)
+        if desc_feat_clean and (not catalog_has_text or desc_cat_clean):
+            desc_parts.append(desc_feat_clean)
+
+        modo_clean = modo_source_text.strip() if modo_source_text and modo_source_text.strip() else ""
+        uso_cat_clean = uso_cat.strip() if uso_cat and uso_cat.strip() else ""
+        uso_feat_clean = uso_feat.strip() if uso_feat and uso_feat.strip() else ""
+
+        uso_segments: List[Tuple[str, str]] = []
+        if modo_clean:
+            uso_segments.append(("modo", modo_clean))
+        if uso_cat_clean:
+            uso_segments.append(("catalog", uso_cat_clean))
+        if uso_feat_clean:
+            uso_segments.append(("features", uso_feat_clean))
+
         desc_final = " ".join(desc_parts).strip()
+        uso_final = " ".join(segment for _, segment in uso_segments).strip()
+
+        if not desc_final and uso_final:
+            total_usage_score = usage_score(uso_final, markers_for_scoring)
+            has_strong_heading = starts_with_strong_label(uso_final, USAGE_STRONG_LABELS)
+            if total_usage_score <= 1 and not has_strong_heading:
+                desc_final = uso_final
+                uso_final = ""
+
+        if desc_feat_clean:
+            row["_features"] = desc_feat_clean
+        else:
+            row.pop("_features", None)
+
         if desc_final:
             row["_description"] = desc_final
         else:
             row.pop("_description", None)
 
-        if desc_feat and desc_feat.strip():
-            row["_features"] = desc_feat.strip()
+        if uso_final:
+            row["modo_de_uso"] = uso_final
         else:
-            row.pop("_features", None)
+            row.pop("modo_de_uso", None)
         unit_value = self._coerce_extra_text(product.unit or extra.get("unidade"))
         if unit_value:
             row["unidade"] = unit_value
@@ -821,12 +1073,6 @@ class CSVGenerator:
         if resistance_value:
             row["resistencia_a_agua"] = resistance_value
 
-        uso_parts = [part.strip() for part in (modo_source_text, uso_cat, uso_feat) if part and part.strip()]
-        uso_final = " ".join(uso_parts).strip()
-        if uso_final:
-            row["modo_de_uso"] = uso_final
-        else:
-            row.pop("modo_de_uso", None)
         dimension_value = (
             extra.get("dimensoes_sem_embalagem")
             or extra.get("dimensoes_com_embalagem")
