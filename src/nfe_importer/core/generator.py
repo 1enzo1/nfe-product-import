@@ -6,7 +6,7 @@ import logging
 import re
 import unicodedata
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple, cast
 
 import pandas as pd
 
@@ -45,6 +45,65 @@ BODY_USAGE_PREFIXES = (
     'use um pano',
     'manter o produto',
 )
+
+SIZE_TOKENS = {"PP", "P", "M", "G", "GG"}
+DIM_PATTERN = re.compile(r"\b(\d{1,3})\s*[xX]\s*(\d{1,3})(?:\s*[xX]\s*(\d{1,3}))?\b")
+MODEL_ALPHA = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+MODEL_NUM = re.compile(r"^\d{1,3}$")
+CAP_PATTERN = re.compile(r"\b(\d{1,4})\s*(ml|l|litros)\b", re.IGNORECASE)
+WGT_PATTERN = re.compile(r"\b(\d{1,4})\s*(g|kg)\b", re.IGNORECASE)
+
+
+def _last_token(token: str) -> str:
+    text = (token or "").strip()
+    for separator in ("-", "–", "_", " "):
+        if separator in text:
+            text = text.split(separator)[-1].strip()
+    return text
+
+
+def _extract_size(token: str) -> str | None:
+    candidate = (token or "").strip().upper()
+    return candidate if candidate in SIZE_TOKENS else None
+
+
+def _extract_dim(token: str) -> str | None:
+    match = DIM_PATTERN.search(token or "")
+    if not match:
+        return None
+    normalized: List[str] = []
+    for part in match.groups():
+        if not part:
+            continue
+        try:
+            normalized.append(str(int(part)))
+        except ValueError:
+            cleaned = part.lstrip("0")
+            normalized.append(cleaned or "0")
+    return "x".join(normalized) if normalized else None
+
+
+def _extract_model(token: str) -> str | None:
+    candidate = (token or "").strip().upper()
+    if len(candidate) == 1 and candidate in MODEL_ALPHA:
+        return candidate
+    if MODEL_NUM.match(candidate):
+        return candidate
+    return None
+
+
+def _extract_capacity_or_weight(token: str) -> tuple[str, str] | None:
+    match = CAP_PATTERN.search(token or "")
+    if match:
+        unit = match.group(2).lower()
+        normalized = f"{match.group(1)} ml" if unit == "ml" else f"{match.group(1)} L"
+        return "Capacidade", normalized
+    match = WGT_PATTERN.search(token or "")
+    if match:
+        unit = match.group(2).lower()
+        normalized = f"{match.group(1)} g" if unit == "g" else f"{match.group(1)} kg"
+        return "Peso", normalized
+    return None
 
 
 SHOPIFY_HEADER = [
@@ -860,14 +919,127 @@ class CSVGenerator:
                 df[column] = ""
         df[option_columns] = ""
 
+        def _coerce_text(idx: int, key: str) -> str:
+            if key not in df.columns:
+                return ""
+            raw = df.at[idx, key]
+            if isinstance(raw, str):
+                candidate = raw.strip()
+            else:
+                if pd.isna(raw):
+                    return ""
+                candidate = str(raw).strip()
+            if not candidate or candidate.casefold() == "nan":
+                return ""
+            return candidate
+
+        def _variant_position(idx: int) -> int:
+            for key in ("Variant Position", "Variant Pos"):
+                candidate = _coerce_text(idx, key)
+                if candidate:
+                    normalized = candidate.replace(",", ".")
+                    try:
+                        return int(float(normalized))
+                    except (TypeError, ValueError):
+                        continue
+            return 0
+
+        def _variant_sku(idx: int) -> str:
+            sku = _coerce_text(idx, "Variant SKU")
+            if sku:
+                return sku
+            return _coerce_text(idx, "SKU")
+
         for handle, group in df.groupby("Handle", sort=False):
-            axis, values = self._infer_option_axis(handle, group)
-            if axis and values:
-                df.loc[group.index, "Option1 Name"] = axis
-                for idx, value in zip(group.index, values):
-                    df.at[idx, "Option1 Value"] = value
-            elif len(group) > 1 and handle:
+            indices = list(group.index)
+            sorted_indices = sorted(
+                indices,
+                key=lambda idx: (_variant_position(idx), _variant_sku(idx)),
+            )
+
+            if len(sorted_indices) < 2:
+                for idx in sorted_indices:
+                    df.at[idx, "Option1 Name"] = ""
+                    df.at[idx, "Option1 Value"] = ""
+                    df.at[idx, "Option2 Name"] = ""
+                    df.at[idx, "Option2 Value"] = ""
+                    df.at[idx, "Option3 Name"] = ""
+                    df.at[idx, "Option3 Value"] = ""
+                continue
+
+            tokens_per_variant: List[str] = []
+            for idx in sorted_indices:
+                token = (
+                    _coerce_text(idx, "Variant SKU")
+                    or _coerce_text(idx, "SKU")
+                    or _coerce_text(idx, "Title")
+                )
+                tokens_per_variant.append(token)
+
+            axis: Optional[str] = None
+            values: Optional[List[str]] = None
+
+            sizes = [
+                _extract_size(_last_token(token)) or _extract_size(token)
+                for token in tokens_per_variant
+            ]
+            if all(sizes) and len(set(sizes)) > 1:
+                axis = "Tamanho"
+                values = [cast(str, size) for size in sizes]
+            else:
+                dims = [_extract_dim(token) for token in tokens_per_variant]
+                if all(dims) and len(set(dims)) > 1:
+                    axis = "Formato"
+                    values = [cast(str, dimension) for dimension in dims]
+                else:
+                    models = [
+                        _extract_model(_last_token(token)) or _extract_model(token)
+                        for token in tokens_per_variant
+                    ]
+                    if all(models) and len(set(models)) > 1 and (
+                        all(len(model) == 1 for model in models if model)
+                        or all(model.isdigit() for model in models if model)
+                    ):
+                        axis = "Modelo"
+                        values = [cast(str, model) for model in models]
+                    else:
+                        capw_candidates = [_extract_capacity_or_weight(token) for token in tokens_per_variant]
+                        capw_pairs = [pair for pair in capw_candidates if pair]
+                        if (
+                            len(capw_pairs) == len(tokens_per_variant)
+                            and len({key for key, _ in capw_pairs}) == 1
+                            and len({value for _, value in capw_pairs}) > 1
+                        ):
+                            axis = capw_pairs[0][0]
+                            values = [value for _, value in capw_pairs]
+
+            for position, idx in enumerate(sorted_indices):
+                df.at[idx, "Option2 Name"] = ""
+                df.at[idx, "Option2 Value"] = ""
+                df.at[idx, "Option3 Name"] = ""
+                df.at[idx, "Option3 Value"] = ""
+                if axis and values:
+                    df.at[idx, "Option1 Name"] = axis
+                    df.at[idx, "Option1 Value"] = str(values[position])
+                else:
+                    df.at[idx, "Option1 Name"] = ""
+                    df.at[idx, "Option1 Value"] = ""
+
+                name_text = str(df.at[idx, "Option1 Name"]).strip().lower()
+                if name_text == "title":
+                    df.at[idx, "Option1 Name"] = ""
+                value_text = str(df.at[idx, "Option1 Value"]).strip().lower()
+                if value_text == "default title":
+                    df.at[idx, "Option1 Value"] = ""
+
+            if not axis and handle and len(sorted_indices) > 1:
                 LOGGER.info("Option axis not inferred for handle %s; leaving options blank", handle)
+
+        if "Option1 Name" in df.columns:
+            name_series = df["Option1 Name"].fillna("")
+            mask_title_name = name_series.str.strip().str.casefold() == "title"
+            if mask_title_name.any():
+                df.loc[mask_title_name, "Option1 Name"] = ""
 
         if "Option1 Value" in df.columns:
             option_series = df["Option1 Value"].fillna("")
@@ -876,125 +1048,6 @@ class CSVGenerator:
                 df.loc[mask_default, "Option1 Value"] = ""
 
         return df
-
-
-    def _infer_option_axis(self, handle: str, group: pd.DataFrame) -> Tuple[Optional[str], List[str]]:
-        if len(group) <= 1:
-            return None, []
-
-        detectors = [
-            ("Tamanho", self._extract_size_option),
-            ("Capacidade", self._extract_capacity_option),
-            ("Peso", self._extract_weight_option),
-            ("Cor", self._extract_color_option),
-        ]
-
-        for axis_name, extractor in detectors:
-            values: List[str] = []
-            failed = False
-            for _, row in group.iterrows():
-                value = extractor(row)
-                if not value:
-                    failed = True
-                    break
-                values.append(value)
-            if failed or not values:
-                continue
-            normalized = {value.casefold() for value in values}
-            if len(normalized) <= 1:
-                continue
-            return axis_name, values
-
-        return None, []
-
-
-    @staticmethod
-    def _option_candidate_strings(row: pd.Series) -> Sequence[str]:
-        candidates: List[str] = []
-        for key in ("Variant SKU", "SKU", "Title"):
-            value = row.get(key)
-            if value is None:
-                continue
-            if isinstance(value, str):
-                text = value.strip()
-            else:
-                if pd.isna(value):
-                    continue
-                text = str(value).strip()
-            if not text or text.casefold() == "nan":
-                continue
-            candidates.append(text)
-        return candidates
-
-
-    def _extract_size_option(self, row: pd.Series) -> Optional[str]:
-        for text in self._option_candidate_strings(row):
-            match = SIZE_TOKEN_PATTERN.search(text)
-            if match:
-                token = match.group(1).upper()
-                if token in SIZE_TOKEN_CHOICES:
-                    return token
-            numeric_match = SIZE_NUMERIC_PATTERN.search(text)
-            if numeric_match:
-                number = numeric_match.group(1)
-                try:
-                    numeric_value = int(number)
-                except ValueError:
-                    continue
-                if numeric_value in SIZE_NUMERIC_RANGE:
-                    return number
-        return None
-
-
-    def _extract_capacity_option(self, row: pd.Series) -> Optional[str]:
-        for text in self._option_candidate_strings(row):
-            match = CAPACITY_PATTERN.search(text)
-            if not match:
-                continue
-            raw_number = match.group(1).replace(',', '.')
-            unit = match.group(2).casefold()
-            try:
-                number = float(raw_number)
-            except ValueError:
-                continue
-            formatted = self._format_number(number, max_decimals=3)
-            if unit.startswith('ml'):
-                return f"{formatted} ml"
-            if unit.startswith('l'):
-                return f"{formatted} L"
-        return None
-
-
-    def _extract_weight_option(self, row: pd.Series) -> Optional[str]:
-        for text in self._option_candidate_strings(row):
-            match = WEIGHT_PATTERN.search(text)
-            if not match:
-                continue
-            raw_number = match.group(1).replace(',', '.')
-            unit = match.group(2).casefold()
-            try:
-                number = float(raw_number)
-            except ValueError:
-                continue
-            formatted = self._format_number(number, max_decimals=3)
-            if unit == 'g':
-                return f"{formatted} g"
-            if unit == 'kg':
-                return f"{formatted} kg"
-        return None
-
-
-    def _extract_color_option(self, row: pd.Series) -> Optional[str]:
-        title = str(row.get("Title") or "").strip()
-        if not title:
-            return None
-        lowered = title.casefold()
-        matches = [color for color in COLOR_TOKEN_SET if color in lowered]
-        if not matches:
-            return None
-        matches.sort(key=len, reverse=True)
-        label = matches[0]
-        return label.title()
 
 
     def _apply_catalog_details(self, row: Dict[str, object], product: CatalogProduct) -> None:

@@ -16,14 +16,7 @@ if SRC_DIR.exists():
     if src_str not in sys.path:
         sys.path.append(src_str)
 
-from nfe_importer.core.generator import (
-    CAPACITY_PATTERN,
-    COLOR_TOKEN_SET,
-    SIZE_NUMERIC_RANGE,
-    SIZE_TOKEN_CHOICES,
-    SIZE_TOKEN_PATTERN,
-    WEIGHT_PATTERN,
-)
+from nfe_importer.core.generator import SIZE_TOKENS
 from nfe_importer.core.text_splitters import DEFAULT_USAGE_MARKERS, normalise_markers, usage_score
 
 EMPTY_MARKERS = {"", "nan", "none", "null"}
@@ -73,42 +66,31 @@ def find_marker_in_text(text: str, markers: Sequence[str]) -> tuple[str | None, 
     return best_marker, best_idx
 
 
+def _type_of_value(axis: str, value: str) -> str:
+    axis_label = (axis or "").strip()
+    raw_token = (value or "").strip()
+    if not raw_token:
+        return "EMPTY"
+    token_upper = raw_token.upper()
+    token_base = token_upper.split("-", 1)[0].strip()
+    axis_key = axis_label.title()
+    if axis_key == "Tamanho":
+        return "SIZE" if token_base in SIZE_TOKENS else "OTHER"
+    if axis_key == "Formato":
+        return "DIM" if re.match(r"^\d{1,3}x\d{1,3}(x\d{1,3})?$", token_base) else "OTHER"
+    if axis_key == "Modelo":
+        if len(token_base) == 1 and token_base.isalpha():
+            return "ALPHA"
+        if token_base.isdigit():
+            return "NUM"
+        return "OTHER"
+    if axis_key in {"Capacidade", "Peso"}:
+        return "NUMUNIT" if re.match(r"^\d{1,4}\s?(ML|L|G|KG)$", token_base) else "OTHER"
+    return "OTHER"
 
 
 
 
-def classify_option_value(value: str) -> str:
-    if not value:
-        return ''
-    text = str(value).strip()
-    if not text:
-        return ''
-    upper = text.upper()
-    if upper in SIZE_TOKEN_CHOICES:
-        return 'size'
-    token_match = SIZE_TOKEN_PATTERN.search(text)
-    if token_match:
-        token = token_match.group(1).upper()
-        if token in SIZE_TOKEN_CHOICES:
-            return 'size'
-    if text.isdigit() and len(text) == 2:
-        try:
-            numeric = int(text)
-        except ValueError:
-            numeric = None
-        if numeric in SIZE_NUMERIC_RANGE:
-            return 'size'
-    capacity_match = CAPACITY_PATTERN.search(text)
-    if capacity_match:
-        return 'capacity'
-    weight_match = WEIGHT_PATTERN.search(text)
-    if weight_match:
-        return 'weight'
-    lowered = text.casefold()
-    for color in COLOR_TOKEN_SET:
-        if color in lowered:
-            return 'color'
-    return 'other'
 
 
 def collect_warnings(dataframe: pd.DataFrame, markers: Sequence[str]) -> List[Dict[str, str]]:
@@ -288,29 +270,38 @@ def collect_warnings(dataframe: pd.DataFrame, markers: Sequence[str]) -> List[Di
     for handle, info in handle_info.items():
         if not handle or info.get('count', 0) <= 1:
             continue
-        normalized_names = {name for name in info['names'] if name}
-        if len(normalized_names) > 1:
-            names_display = sorted({name for name in info['names_display'] if name})
+        axis_names = sorted({name.strip() for name in info['names_display'] if name and name.strip()})
+        sku_reference = info['skus'][0] if info['skus'] else ''
+        if not axis_names:
             warnings.append({
-                'sku': info['skus'][0] if info['skus'] else '',
+                'sku': sku_reference,
                 'handle': handle,
-                'field': 'Option1',
-                'warning_type': 'option_axis_mixed',
-                'snippet': ', '.join(names_display) or 'mixed axis',
+                'field': 'Option1 Name',
+                'warning_type': 'no_axis_in_group',
+                'snippet': f'handle={handle}',
             })
-        values = [val for val in info['values'] if val]
-        if len(values) > 1:
-            classes = [classify_option_value(val) for val in values]
-            primary = {cls for cls in classes if cls not in {'', 'other'}}
-            mixed_types = len(primary) > 1
-            has_other_with_primary = 'other' in classes and primary
-            if mixed_types or has_other_with_primary:
+            continue
+        normalized_names = {name.casefold() for name in axis_names}
+        if len(normalized_names) > 1:
+            warnings.append({
+                'sku': sku_reference,
+                'handle': handle,
+                'field': 'Option1 Name',
+                'warning_type': 'option_axis_mixed',
+                'snippet': f"axes={sorted(axis_names)}",
+            })
+            continue
+        axis_label = axis_names[0]
+        option1_values = [val for val in info['values'] if val]
+        if len(option1_values) > 1:
+            types = {_type_of_value(axis_label, value) for value in option1_values}
+            if (axis_label.title() == "Modelo" and {"ALPHA", "NUM"} <= types) or any(type_code == "OTHER" for type_code in types):
                 warnings.append({
-                    'sku': info['skus'][0] if info['skus'] else '',
+                    'sku': sku_reference,
                     'handle': handle,
-                    'field': 'Option1',
+                    'field': 'Option1 Value',
                     'warning_type': 'option_value_incoherent',
-                    'snippet': ', '.join(sorted(set(values))),
+                    'snippet': f"axis={axis_label}; types={sorted(types)}",
                 })
 
     return warnings
