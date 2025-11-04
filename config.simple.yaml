@@ -1,0 +1,21 @@
+paths:
+  nfe_input_folder: "data/"
+  master_data_file: "example_docs/MART-Ficha-tecnica-Biblioteca-Virtual-08-08-2025.xlsx"
+  output_folder: "output/"
+  log_folder: "logs/"
+  synonym_cache_file: "data/synonyms.json"
+
+pricing:
+  strategy: "markup_fixo"
+  markup_factor: 2.2
+
+csv_output:
+  filename_prefix: "importacao_produtos_simple_"
+  delimiter: ","
+  columns:
+    - "Handle"
+    - "Title"
+    - "Variant SKU"
+    - "Variant Price"
+    - "Variant Inventory Qty"
+
